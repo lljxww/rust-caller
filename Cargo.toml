@@ -1,0 +1,12 @@
+[package]
+name = "caller"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+license-file = "LICENSE"
+description = "A WebApi Caller"
+homepage = "https://github.com/lljxww/rust-caller"
+repository = "https://github.com/lljxww/rust-caller"
+readme = "README.md"
+
+[dependencies]
