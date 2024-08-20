@@ -1,0 +1,17 @@
+{
+    "Authorizations": [],
+    "ServiceItems": [
+        {
+            "ApiName": "weibo",
+            "BaseUrl": "https://weibo.com/ajax",
+            "ApiItems": [
+                {
+                    "Method": "hot",
+                    "Url": "/side/hotSearch",
+                    "HttpMethod": "GET",
+                    "ParamType": "query"
+                }
+            ]
+        }
+    ]
+}
