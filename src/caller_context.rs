@@ -1,20 +1,17 @@
-use std::collections::HashMap;
-
-use reqwest::header;
-
 use super::caller_const;
 use super::config_loader::ConfigLoader;
-use super::http_method::HttpMethod;
-use crate::models::api_item::ApiItem;
 use crate::models::caller_config::CallerConfig;
 use crate::models::service_item::ServiceItem;
+use crate::models::{api_item::ApiItem, api_result::ApiResult};
+use reqwest::{header, Method};
+use std::collections::HashMap;
 
 pub struct CallerContext {
     pub service_name: String,
     pub api_name: String,
     pub service_item: ServiceItem,
     pub api_item: ApiItem,
-    pub http_method: HttpMethod,
+    pub http_method: Method,
     pub url: String,
 }
 
@@ -36,7 +33,7 @@ impl CallerContext {
             api_name,
             service_item,
             api_item,
-            http_method: HttpMethod::Get,
+            http_method: Method::default(),
             url: get_final_url(method, &ConfigLoader::get_config_ref()),
         };
 
@@ -48,25 +45,21 @@ impl CallerContext {
     pub async fn call(
         method: &str,
         params: Option<HashMap<String, String>>,
-    ) -> Result<String, reqwest::Error> {
+    ) -> Result<ApiResult, reqwest::Error> {
         let context = CallerContext::build(method, params);
         let client = reqwest::Client::new();
 
-        match context.http_method {
-            HttpMethod::Get => {
-                let result = client
-                    .get(context.url)
-                    .header(header::USER_AGENT, caller_const::UA)
-                    .header(header::CONTENT_TYPE, caller_const::DEFAULT_CONTENT_TYPE)
-                    .send()
-                    .await?
-                    .text()
-                    .await?;
+        let response = client
+            .request(context.http_method, context.url)
+            .header(header::USER_AGENT, caller_const::UA)
+            .header(header::CONTENT_TYPE, caller_const::DEFAULT_CONTENT_TYPE)
+            .send()
+            .await?;
 
-                Ok(result)
-            }
-            _ => panic!("not implemented"),
-        }
+        let status_code = response.status();
+        let result = response.text().await?;
+
+        Ok(ApiResult::build(result, status_code))
     }
 }
 
@@ -106,13 +99,12 @@ fn get_final_url(method: &str, config: &CallerConfig) -> String {
     format!("{}{}", service_item.base_url, api_item.url)
 }
 
-fn get_http_method(http_method: &str) -> HttpMethod {
+fn get_http_method(http_method: &str) -> Method {
     match http_method.to_lowercase().as_str() {
-        "get" => HttpMethod::Get,
-        "post" => HttpMethod::Post,
-        "put" => HttpMethod::Put,
-        "delete" => HttpMethod::Delete,
-        "options" => HttpMethod::Options,
+        "get" => Method::GET,
+        "post" => Method::POST,
+        "put" => Method::PUT,
+        "delete" => Method::DELETE,
         _ => panic!("http method is not valid"),
     }
 }

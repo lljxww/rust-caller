@@ -26,8 +26,10 @@ fn test_load_config() {
 #[test]
 fn test_caller_get() {
     async fn test_caller_get_async() {
-        let result = lib::get("weibo.hot", None).await.unwrap();
-        println!("{}", result);
+        let result = lib::call("weibo.hot", None).await.unwrap();
+        println!("{}", result.raw);
+
+        assert_eq!("1", result.get("ok").unwrap_or("-1".to_string()));
     }
 
     let rt = Builder::new_current_thread().enable_all().build().unwrap();
