@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use super::{authorization::Authorization, service_item::ServiceItem};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct CallerConfig {
     #[serde(rename = "Authorizations")]
     pub authorizations: Vec<Authorization>,

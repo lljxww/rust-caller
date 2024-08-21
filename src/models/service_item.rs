@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use super::api_item::ApiItem;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ServiceItem {
     #[serde(rename = "ApiName")]
     pub api_name: String,

@@ -26,7 +26,7 @@ fn test_load_config() {
 #[test]
 fn test_caller_get() {
     async fn test_caller_get_async() {
-        let result = lib::get("weibo.hot").await.unwrap();
+        let result = lib::get("weibo.hot", None).await.unwrap();
         println!("{}", result);
     }
 
