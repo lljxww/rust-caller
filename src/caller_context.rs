@@ -13,6 +13,7 @@ pub struct CallerContext {
     pub api_item: ApiItem,
     pub http_method: Method,
     pub url: String,
+    pub params: Option<HashMap<String, String>>,
 }
 
 impl CallerContext {
@@ -28,13 +29,24 @@ impl CallerContext {
 
         let (service_item, api_item) = ConfigLoader::get_config(&service_name, &api_name);
 
+        let mut url = get_final_url(method, &ConfigLoader::get_config_ref());
+
+        if api_item.param_type.to_lowercase() == "path" {
+            if !params.is_none() {
+                for param in params.clone().unwrap() {
+                    url = url.replace(format!("{{{}}}", param.0).as_str(), param.1.as_str());
+                }
+            }
+        }
+
         let mut caller_context = CallerContext {
             service_name,
             api_name,
             service_item,
             api_item,
             http_method: Method::default(),
-            url: get_final_url(method, &ConfigLoader::get_config_ref()),
+            url,
+            params,
         };
 
         caller_context.http_method = get_http_method(&caller_context.api_item.http_method);
@@ -49,12 +61,21 @@ impl CallerContext {
         let context = CallerContext::build(method, params);
         let client = reqwest::Client::new();
 
-        let response = client
+        let mut rb = client
             .request(context.http_method, context.url)
             .header(header::USER_AGENT, caller_const::UA)
-            .header(header::CONTENT_TYPE, caller_const::DEFAULT_CONTENT_TYPE)
-            .send()
-            .await?;
+            .header(header::CONTENT_TYPE, caller_const::DEFAULT_CONTENT_TYPE);
+
+        if !context.params.is_none() {
+            match context.api_item.param_type.to_lowercase().as_str() {
+                "query" => rb = rb.query(&context.params.unwrap()),
+                "json" => rb = rb.json(&context.params.unwrap()),
+                "form" => rb = rb.form(&context.params.unwrap()),
+                _ => (),
+            }
+        }
+
+        let response = rb.send().await?;
 
         let status_code = response.status();
         let result = response.text().await?;
@@ -105,6 +126,7 @@ fn get_http_method(http_method: &str) -> Method {
         "post" => Method::POST,
         "put" => Method::PUT,
         "delete" => Method::DELETE,
+        "patch" => Method::PATCH,
         _ => panic!("http method is not valid"),
     }
 }
