@@ -12,6 +12,54 @@
                     "ParamType": "query"
                 }
             ]
+        },
+        {
+            "ApiName": "JP",
+            "BaseUrl": "https://jsonplaceholder.typicode.com",
+            "ApiItems": [
+                {
+                    "Method": "get",
+                    "Url": "/posts/{post_id}",
+                    "HttpMethod": "GET",
+                    "ParamType": "path"
+                },
+                {
+                    "Method": "list",
+                    "Url": "/posts",
+                    "HttpMethod": "GET",
+                    "ParamType": "none"
+                },
+                {
+                    "Method": "create",
+                    "Url": "/posts",
+                    "HttpMethod": "POST",
+                    "ParamType": "json"
+                },
+                {
+                    "Method": "update",
+                    "Url": "/posts",
+                    "HttpMethod": "PUT",
+                    "ParamType": "path,json"
+                },
+                {
+                    "Method": "patch",
+                    "Url": "/posts",
+                    "HttpMethod": "PATCH",
+                    "ParamType": "path,json"
+                },
+                {
+                    "Method": "delete",
+                    "Url": "/posts",
+                    "HttpMethod": "PATCH",
+                    "ParamType": "path"
+                },
+                {
+                    "Method": "filter",
+                    "Url": "/posts",
+                    "HttpMethod": "GET",
+                    "ParamType": "query"
+                }
+            ]
         }
     ]
 }

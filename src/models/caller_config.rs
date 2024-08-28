@@ -1,8 +1,6 @@
-use std::fmt::{Display, Formatter, Result};
-
-use serde::Deserialize;
-
 use super::{authorization::Authorization, service_item::ServiceItem};
+use serde::Deserialize;
+use std::fmt::{Display, Formatter, Result};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct CallerConfig {
