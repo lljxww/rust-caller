@@ -1,5 +1,6 @@
 use reqwest::StatusCode;
 use serde_json::Value;
+use crate::shared::error::CallerError;
 
 pub const SPLIT_OPERATOR: &'static str = ".";
 
@@ -11,14 +12,17 @@ pub struct ApiResult {
 }
 
 impl ApiResult {
-    pub fn build(raw: String, status_code: StatusCode) -> ApiResult {
-        let j_obj: Value = serde_json::from_str(&raw).unwrap();
+    pub fn build(raw: String, status_code: StatusCode) -> Result<ApiResult, CallerError> {
+        let j_obj: Value = serde_json::from_str(&raw)
+            .map_err(|e| CallerError::JsonError(format!(
+                "Failed to parse JSON response: {}", e
+            )))?;
 
-        ApiResult {
+        Ok(ApiResult {
             status_code,
             raw,
             j_obj,
-        }
+        })
     }
 
     fn get_deep(&self, keys: Vec<&str>) -> Option<&Value> {
@@ -50,11 +54,27 @@ impl ApiResult {
     }
 
     pub fn get_as_bool(&self, key: &str) -> Option<bool> {
-        self.j_obj.get(key).and_then(Value::as_bool)
+        if key.contains(SPLIT_OPERATOR) {
+            let keys: Vec<&str> = key.split(SPLIT_OPERATOR).collect();
+            match self.get_deep(keys) {
+                Some(value) => value.as_bool(),
+                None => None,
+            }
+        } else {
+            self.j_obj.get(key).and_then(Value::as_bool)
+        }
     }
 
     pub fn get_as_i64(&self, key: &str) -> Option<i64> {
-        self.j_obj.get(key).and_then(Value::as_i64)
+        if key.contains(SPLIT_OPERATOR) {
+            let keys: Vec<&str> = key.split(SPLIT_OPERATOR).collect();
+            match self.get_deep(keys) {
+                Some(value) => value.as_i64(),
+                None => None,
+            }
+        } else {
+            self.j_obj.get(key).and_then(Value::as_i64)
+        }
     }
 
     pub fn get_as_f64(&self, key: &str) -> Option<f64> {
