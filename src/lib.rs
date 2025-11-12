@@ -1,21 +1,30 @@
-pub mod caller_const;
-pub mod caller_context;
-pub mod config_loader;
-pub mod models;
-pub mod utils;
+// Core modules
+pub mod core;
+pub mod config;
+pub mod domain;
+pub mod infra;
+pub mod shared;
 
-use crate::models::api_result::ApiResult;
-use caller_context::CallerContext;
+// Re-export public APIs for convenience
+pub use core::*;
+pub use domain::*;
+pub use config::*;
+
+// Main public API
 use std::collections::HashMap;
 
+/// Main error type for the caller library
+pub use shared::error::CallerError;
+
+/// Main public API trait
 pub trait Callable<T> {
-    fn call(method: &str, params: T) -> Result<ApiResult, reqwest::Error>;
+    fn call(method: &str, params: T) -> Result<domain::api_result::ApiResult, CallerError>;
 }
 
+/// Main public API function
 pub async fn call(
     method: &str,
     params: Option<HashMap<String, String>>,
-) -> Result<ApiResult, reqwest::Error> {
-    CallerContext::call(method, params).await
+) -> Result<domain::api_result::ApiResult, CallerError> {
+    core::context::CallerContext::call(method, params).await
 }
-0
