@@ -2,7 +2,7 @@ use reqwest::{Client, header, Method};
 use crate::shared::error::CallerError;
 
 /// HTTP client for making requests
-pub struct HttpClient {
+pub(crate) struct HttpClient {
     client: Client,
 }
 

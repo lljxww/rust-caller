@@ -7,7 +7,7 @@ use reqwest::{header, Method};
 use std::collections::HashMap;
 use crate::shared::error::CallerError;
 
-pub struct CallerContext {
+pub(crate) struct CallerContext {
     pub service_name: String,
     pub api_name: String,
     pub service_item: ServiceItem,
@@ -89,7 +89,7 @@ impl CallerContext {
     }
 }
 
-pub fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
+pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
     if !method.contains(".") {
         return Err(CallerError::invalid_method_format(method));
     }
@@ -124,7 +124,7 @@ pub fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
     Ok(result)
 }
 
-fn get_final_url(method: &str, config: &CallerConfig) -> Result<String, CallerError> {
+pub(crate) fn get_final_url(method: &str, config: &CallerConfig) -> Result<String, CallerError> {
     let splited_method = split_method(method)?;
 
     let service_item = config
@@ -153,7 +153,7 @@ pub fn get_http_method(http_method: &str) -> Result<Method, CallerError> {
     }
 }
 
-fn validate_path_parameters(url: &str, provided_params: Vec<&str>) -> Result<(), CallerError> {
+pub(crate) fn validate_path_parameters(url: &str, provided_params: Vec<&str>) -> Result<(), CallerError> {
     // Find all required parameters in URL (between { and })
     let mut required_params = Vec::new();
     let mut chars = url.chars().peekable();
@@ -198,7 +198,7 @@ fn validate_path_parameters(url: &str, provided_params: Vec<&str>) -> Result<(),
     Ok(())
 }
 
-fn substitute_path_parameters(url: &str, params: &HashMap<String, String>) -> Result<String, CallerError> {
+pub(crate) fn substitute_path_parameters(url: &str, params: &HashMap<String, String>) -> Result<String, CallerError> {
     let mut result = url.to_string();
 
     for (key, value) in params {
