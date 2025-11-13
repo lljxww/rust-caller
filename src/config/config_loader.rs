@@ -8,7 +8,7 @@ use crate::{
 };
 use crate::shared::error::CallerError;
 
-pub struct ConfigLoader {}
+pub(crate) struct ConfigLoader {}
 
 static CONFIG: OnceLock<CallerConfig> = OnceLock::new();
 
@@ -53,7 +53,7 @@ impl ConfigLoader {
         Ok(())
     }
 
-    fn load_config() -> Result<CallerConfig, Box<dyn Error>> {
+    pub(crate) fn load_config() -> Result<CallerConfig, Box<dyn Error>> {
         let config = fs::read_to_string("./caller.json")?;
         let caller_config = serde_json::from_str(&config)?;
         Ok(caller_config)

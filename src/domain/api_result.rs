@@ -2,7 +2,7 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use crate::shared::error::CallerError;
 
-pub const SPLIT_OPERATOR: &'static str = ".";
+const SPLIT_OPERATOR: &'static str = ".";
 
 #[derive(Debug, Clone)]
 pub struct ApiResult {
