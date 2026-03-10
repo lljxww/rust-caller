@@ -1,15 +1,17 @@
 use super::constants;
 use crate::config::config_loader::ConfigLoader;
-use crate::domain::caller_config::CallerConfig;
 use crate::domain::service_item::ServiceItem;
-use crate::domain::{api_item::ApiItem, api_result::ApiResult};
-use reqwest::{header, Method};
-use std::collections::HashMap;
+use crate::domain::{api_item::ApiItem, api_result::ApiResult, download_result::DownloadResult};
 use crate::shared::error::CallerError;
+use reqwest::{Method, header};
+use std::collections::HashMap;
 
 pub(crate) struct CallerContext {
+    #[allow(dead_code)]
     pub service_name: String,
+    #[allow(dead_code)]
     pub api_name: String,
+    #[allow(dead_code)]
     pub service_item: ServiceItem,
     pub api_item: ApiItem,
     pub http_method: Method,
@@ -18,21 +20,33 @@ pub(crate) struct CallerContext {
 }
 
 impl CallerContext {
-    pub fn build(method: &str, params: Option<HashMap<String, String>>) -> Result<CallerContext, CallerError> {
+    pub fn build(
+        method: &str,
+        params: Option<HashMap<String, String>>,
+    ) -> Result<CallerContext, CallerError> {
         let splited_method = split_method(method)?;
 
         let service_name = &splited_method[0];
         let api_name = &splited_method[1];
 
-        let (service_item, api_item) = ConfigLoader::get_config(service_name, api_name)?;
+        let (service_item, api_item, base_url) =
+            ConfigLoader::get_config_with_base_url(service_name, api_name)?;
 
-        let mut url = get_final_url(method, &*ConfigLoader::get_config_ref()?)?;
+        let mut url = format!("{}{}", base_url, api_item.url);
 
-        if api_item.param_type.to_lowercase() == "path" {
-            if let Some(params_map) = &params {
-                validate_path_parameters(&url, params_map.keys().map(|s| s.as_str()).collect())?;
-                url = substitute_path_parameters(&url, params_map)?;
-            }
+        // Parse parameter types (supports single type like "path" or combined like "path,json")
+        let param_type_lower = api_item.param_type.to_lowercase();
+        let param_types: Vec<&str> = param_type_lower.split(',').collect();
+
+        // Handle path parameters if present in param types
+        if param_types.contains(&"path") {
+            let params_map = params.as_ref().ok_or_else(|| {
+                CallerError::parameter_error(
+                    "Path parameters are required for this API".to_string(),
+                )
+            })?;
+            validate_path_parameters(&url, params_map.keys().map(|s| s.as_str()).collect())?;
+            url = substitute_path_parameters(&url, params_map)?;
         }
 
         let http_method = get_http_method(&api_item.http_method)?;
@@ -61,21 +75,29 @@ impl CallerContext {
             .header(header::CONTENT_TYPE, constants::DEFAULT_CONTENT_TYPE);
 
         if let Some(params_map) = &context.params {
-            match context.api_item.param_type.to_lowercase().as_str() {
-                "query" => rb = rb.query(params_map),
-                "json" => rb = rb.json(params_map),
-                "form" => rb = rb.form(params_map),
-                "none" => {
-                    // No parameters needed for the request body
-                }
-                "path" => {
-                    // Path parameters were already substituted in URL construction
-                    // No additional processing needed for request body
-                }
-                param_type => {
-                    return Err(CallerError::parameter_error(
-                        format!("Unsupported parameter type: {}", param_type)
-                    ));
+            // Parse parameter types (supports single type like "path" or combined like "path,json")
+            let param_type_lower = context.api_item.param_type.to_lowercase();
+            let param_types: Vec<&str> = param_type_lower.split(',').collect();
+
+            // Handle each parameter type
+            for param_type in param_types {
+                match param_type.trim() {
+                    "query" => rb = rb.query(params_map),
+                    "json" => rb = rb.json(params_map),
+                    "form" => rb = rb.form(params_map),
+                    "path" => {
+                        // Path parameters were already substituted in URL construction
+                        // No additional processing needed for request body
+                    }
+                    "none" => {
+                        // No parameters needed for the request body
+                    }
+                    unsupported => {
+                        return Err(CallerError::parameter_error(format!(
+                            "Unsupported parameter type: {}",
+                            unsupported
+                        )));
+                    }
                 }
             }
         }
@@ -87,16 +109,93 @@ impl CallerContext {
 
         Ok(ApiResult::build(result, status_code)?)
     }
+
+    pub async fn download(
+        method: &str,
+        params: Option<HashMap<String, String>>,
+        extension: Option<String>,
+    ) -> Result<DownloadResult, CallerError> {
+        let context = CallerContext::build(method, params)?;
+        let client = reqwest::Client::new();
+
+        let mut rb = client
+            .request(context.http_method, &context.url)
+            .header(header::USER_AGENT, constants::UA);
+
+        if let Some(params_map) = &context.params {
+            // Parse parameter types (supports single type like "path" or combined like "path,json")
+            let param_type_lower = context.api_item.param_type.to_lowercase();
+            let param_types: Vec<&str> = param_type_lower.split(',').collect();
+
+            // Handle each parameter type
+            for param_type in param_types {
+                match param_type.trim() {
+                    "query" => rb = rb.query(params_map),
+                    "json" => rb = rb.json(params_map),
+                    "form" => rb = rb.form(params_map),
+                    "path" => {
+                        // Path parameters were already substituted in URL construction
+                        // No additional processing needed for request body
+                    }
+                    "none" => {
+                        // No parameters needed for the request body
+                    }
+                    unsupported => {
+                        return Err(CallerError::parameter_error(format!(
+                            "Unsupported parameter type: {}",
+                            unsupported
+                        )));
+                    }
+                }
+            }
+        }
+
+        let response = rb.send().await?;
+        let status_code = response.status();
+        
+        // Get content type from response headers before consuming the response
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        // Extract Content-Disposition header before consuming the response
+        let content_disposition = response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let content = response.bytes().await?.to_vec();
+
+        let mut download_result = DownloadResult::from_response(status_code, content, content_type)?;
+
+        // Override extension if manually specified
+        if let Some(ext) = extension {
+            download_result = download_result.with_extension(&ext);
+        }
+
+        // Try to extract filename from Content-Disposition header
+        if let Some(disposition) = content_disposition {
+            if let Some(filename) = extract_filename_from_disposition(&disposition) {
+                download_result = download_result.with_filename(filename);
+            }
+        }
+
+        Ok(download_result)
+    }
 }
 
 pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
-    if !method.contains(".") {
+    if !method.contains('.') {
         return Err(CallerError::invalid_method_format(method));
     }
 
     if method.starts_with('.') || method.ends_with('.') {
         return Err(CallerError::invalid_method_format(format!(
-            "Method cannot start or end with dot: '{}'", method
+            "Method cannot start or end with dot: '{}'",
+            method
         )));
     }
 
@@ -105,41 +204,87 @@ pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
 
     if result.len() != 2 {
         return Err(CallerError::invalid_method_format(format!(
-            "Method must be in format 'service.api', got: '{}'", method
+            "Method must be in format 'service.api', got: '{}'",
+            method
         )));
     }
 
     if result[0].is_empty() {
         return Err(CallerError::invalid_method_format(
-            "Service name cannot be empty".to_string()
+            "Service name cannot be empty".to_string(),
         ));
     }
 
     if result[1].is_empty() {
         return Err(CallerError::invalid_method_format(
-            "API method name cannot be empty".to_string()
+            "API method name cannot be empty".to_string(),
         ));
     }
 
     Ok(result)
 }
 
-pub(crate) fn get_final_url(method: &str, config: &CallerConfig) -> Result<String, CallerError> {
-    let splited_method = split_method(method)?;
+/// Extract filename from Content-Disposition header
+/// Supports both "inline" and "attachment" disposition types
+/// Handles both "filename=" and "filename*=" parameters
+fn extract_filename_from_disposition(disposition: &str) -> Option<String> {
+    // Try to extract filename from "filename=" parameter
+    if let Some(start) = disposition.find("filename=") {
+        let rest = &disposition[start + 9..];
+        
+        // Filename can be in quotes
+        if rest.starts_with('"') {
+            if let Some(end) = rest[1..].find('"') {
+                return Some(rest[1..end + 1].to_string());
+            }
+        } else {
+            // Filename without quotes - extract until semicolon or end
+            let end = rest.find(';').unwrap_or(rest.len());
+            let filename = rest[..end].trim();
+            return Some(filename.to_string());
+        }
+    }
 
-    let service_item = config
-        .service_items
-        .iter()
-        .find(|s| s.api_name == splited_method[0])
-        .ok_or_else(|| CallerError::service_not_found(&splited_method[0]))?;
+    // Try to extract from "filename*=" parameter (RFC 5987 encoding)
+    if let Some(start) = disposition.find("filename*=") {
+        let rest = &disposition[start + 10..];
+        
+        // Remove charset and encoding if present (e.g., "UTF-8''")
+        if let Some(prefix_end) = rest.find("'") {
+            if let Some(encoding_end) = rest[prefix_end + 1..].find("'") {
+                let encoded = &rest[prefix_end + encoding_end + 2..];
+                
+                // Decode percent-encoded characters
+                if let Ok(decoded) = percent_decode(encoded) {
+                    return Some(decoded);
+                }
+            }
+        }
+    }
 
-    let api_item = service_item
-        .api_items
-        .iter()
-        .find(|a| a.method == splited_method[1])
-        .ok_or_else(|| CallerError::api_not_found(&splited_method[0], &splited_method[1]))?;
+    None
+}
 
-    Ok(format!("{}{}", service_item.base_url, api_item.url))
+/// Decode percent-encoded string (URL encoding)
+fn percent_decode(s: &str) -> Result<String, std::string::FromUtf8Error> {
+    let mut bytes = Vec::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    
+    while i < chars.len() {
+        if chars[i] == '%' && i + 2 < chars.len() {
+            let hex = format!("{}{}", chars[i + 1], chars[i + 2]);
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                bytes.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        bytes.push(chars[i] as u8);
+        i += 1;
+    }
+    
+    String::from_utf8(bytes)
 }
 
 pub fn get_http_method(http_method: &str) -> Result<Method, CallerError> {
@@ -149,12 +294,16 @@ pub fn get_http_method(http_method: &str) -> Result<Method, CallerError> {
         "put" => Ok(Method::PUT),
         "delete" => Ok(Method::DELETE),
         "patch" => Ok(Method::PATCH),
-        _ => Err(CallerError::http_method_not_supported(http_method.to_string())),
+        _ => Err(CallerError::http_method_not_supported(
+            http_method.to_string(),
+        )),
     }
 }
 
-pub(crate) fn validate_path_parameters(url: &str, provided_params: Vec<&str>) -> Result<(), CallerError> {
-    // Find all required parameters in URL (between { and })
+pub(crate) fn validate_path_parameters(
+    url: &str,
+    provided_params: Vec<&str>,
+) -> Result<(), CallerError> {
     let mut required_params = Vec::new();
     let mut chars = url.chars().peekable();
     let mut current_param = String::new();
@@ -179,16 +328,8 @@ pub(crate) fn validate_path_parameters(url: &str, provided_params: Vec<&str>) ->
         }
     }
 
-    // Check if all provided params are required
-    for param in &provided_params {
-        if !required_params.contains(&param.to_string()) {
-            return Err(CallerError::parameter_error(format!(
-                "Parameter '{}' is not required for this URL. Required parameters: {:?}", param, required_params
-            )));
-        }
-    }
-
-    // Check if all required params are provided
+    // Only check if all required parameters are provided
+    // Don't validate that provided parameters are all required (to support combined param types like "path,json")
     for required in &required_params {
         if !provided_params.contains(&required.as_str()) {
             return Err(CallerError::url_parameter_not_found(required.to_string()));
@@ -198,7 +339,10 @@ pub(crate) fn validate_path_parameters(url: &str, provided_params: Vec<&str>) ->
     Ok(())
 }
 
-pub(crate) fn substitute_path_parameters(url: &str, params: &HashMap<String, String>) -> Result<String, CallerError> {
+pub(crate) fn substitute_path_parameters(
+    url: &str,
+    params: &HashMap<String, String>,
+) -> Result<String, CallerError> {
     let mut result = url.to_string();
 
     for (key, value) in params {
@@ -208,7 +352,6 @@ pub(crate) fn substitute_path_parameters(url: &str, params: &HashMap<String, Str
         }
     }
 
-    // Check if all placeholders were replaced
     if result.contains('{') && result.contains('}') {
         let mut unreplaced_placeholders = Vec::new();
         let mut chars = result.chars().peekable();
@@ -233,7 +376,8 @@ pub(crate) fn substitute_path_parameters(url: &str, params: &HashMap<String, Str
         }
 
         return Err(CallerError::parameter_error(format!(
-            "Missing values for URL parameters: {:?}", unreplaced_placeholders
+            "Missing values for URL parameters: {:?}",
+            unreplaced_placeholders
         )));
     }
 

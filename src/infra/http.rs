@@ -1,11 +1,13 @@
-use reqwest::{Client, header, Method};
 use crate::shared::error::CallerError;
+use reqwest::{Client, Method, header};
 
+#[allow(dead_code)]
 /// HTTP client for making requests
 pub(crate) struct HttpClient {
     client: Client,
 }
 
+#[allow(dead_code)]
 impl HttpClient {
     pub fn new() -> Self {
         Self {
@@ -13,15 +15,12 @@ impl HttpClient {
         }
     }
 
-    pub async fn request(
-        &self,
-        method: &str,
-        url: &str,
-    ) -> Result<String, CallerError> {
+    pub async fn request(&self, method: &str, url: &str) -> Result<String, CallerError> {
         let http_method = Method::from_bytes(method.as_bytes())
             .map_err(|_| CallerError::http_method_not_supported(method.to_string()))?;
 
-        let request = self.client
+        let request = self
+            .client
             .request(http_method, url)
             .header(header::USER_AGENT, "caller/0.1.0");
 

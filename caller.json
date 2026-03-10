@@ -37,20 +37,20 @@
                 },
                 {
                     "Method": "update",
-                    "Url": "/posts",
+                    "Url": "/posts/{post_id}",
                     "HttpMethod": "PUT",
                     "ParamType": "path,json"
                 },
                 {
                     "Method": "patch",
-                    "Url": "/posts",
+                    "Url": "/posts/{post_id}",
                     "HttpMethod": "PATCH",
                     "ParamType": "path,json"
                 },
                 {
                     "Method": "delete",
-                    "Url": "/posts",
-                    "HttpMethod": "PATCH",
+                    "Url": "/posts/{post_id}",
+                    "HttpMethod": "DELETE",
                     "ParamType": "path"
                 },
                 {
