@@ -69,13 +69,23 @@ impl From<reqwest::Error> for CallerError {
 
 impl From<serde_json::Error> for CallerError {
     fn from(err: serde_json::Error) -> Self {
-        CallerError::JsonError(format!("JSON parsing failed at line {}: {}", err.line(), err))
+        CallerError::JsonError(format!(
+            "JSON parsing failed at line {}: {}",
+            err.line(),
+            err
+        ))
     }
 }
 
 impl From<std::io::Error> for CallerError {
     fn from(err: std::io::Error) -> Self {
         CallerError::IoError(err.to_string())
+    }
+}
+
+impl From<notify::Error> for CallerError {
+    fn from(err: notify::Error) -> Self {
+        CallerError::ConfigError(format!("File watch error: {}", err))
     }
 }
 
@@ -150,11 +160,17 @@ impl CallerError {
 
     /// Returns true if this is a network-related error
     pub fn is_network_error(&self) -> bool {
-        matches!(self, CallerError::NetworkError(_) | CallerError::HttpError(_))
+        matches!(
+            self,
+            CallerError::NetworkError(_) | CallerError::HttpError(_)
+        )
     }
 
     /// Returns true if this is a method format error
     pub fn is_method_error(&self) -> bool {
-        matches!(self, CallerError::InvalidMethodFormat(_) | CallerError::HttpMethodNotSupported(_))
+        matches!(
+            self,
+            CallerError::InvalidMethodFormat(_) | CallerError::HttpMethodNotSupported(_)
+        )
     }
 }

@@ -6,6 +6,7 @@
 
 - 🚀 **异步调用**：基于 Tokio 异步运行时，支持高并发请求
 - ⚡ **配置化管理**：通过 JSON 配置文件定义 API 端点
+- 🔄 **热重载**：支持配置文件热重载，无需重启即可更新配置
 - 🔐 **认证支持**：内置多种认证机制（header、query、basic auth）
 - 📊 **结果解析**：强大的 JSON 结果解析，支持深度路径访问
 - 🛡️ **错误处理**：完善的错误类型和错误处理机制
@@ -185,6 +186,36 @@ pub enum CallerError {
 
 #### `api_result.get(key: &str) -> Option<&Value>`
 获取原生 JSON 值
+
+### 配置热重载
+
+Caller 支持配置文件热重载，无需重启程序即可更新 API 配置。
+
+```rust
+use caller::{call, init_config, reload_config, watch_config, stop_watch_config, is_watching_config};
+
+// 初始化配置（通常在应用启动时调用）
+init_config()?;
+
+// 手动重新加载配置
+reload_config()?;
+
+// 启动文件监听，自动检测配置文件变更
+// 使用默认 500ms 防抖时间
+watch_config()?;
+
+// 或使用自定义防抖时间（最小 100ms）
+use std::time::Duration;
+watch_config_with_debounce(Duration::from_millis(1000))?;
+
+// 检查是否正在监听
+if is_watching_config() {
+    println!("配置文件正在被监听");
+}
+
+// 停止监听
+stop_watch_config();
+```
 
 ### 公共 API
 

@@ -3,10 +3,16 @@
 //! 这个示例演示了如何：
 //! - 自定义配置文件
 //! - 使用多个配置文件
-//! - 动态配置更新
+//! - 动态配置更新（热重载）
 //! - 环境变量配置
+//! - 配置热重载监听
 
+use caller::{
+    init_config, is_config_loaded, is_watching_config, reload_config, stop_watch_config,
+    watch_config,
+};
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::fs;
 
 #[tokio::main]
@@ -97,9 +103,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   - HTTP 服务数量: {}", services.len());
         for service in services {
             if let Some(name) = service.get("ApiName").and_then(|n| n.as_str()) {
-                let base_url = service.get("BaseUrl").and_then(|u| u.as_str()).unwrap_or("N/A");
-                let api_count = service.get("ApiItems").and_then(|a| a.as_array()).unwrap_or(&vec![]).len();
-                println!("     - {}: {} 个API端点, 基础URL: {}", name, api_count, base_url);
+                let base_url = service
+                    .get("BaseUrl")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("N/A");
+                let api_count = service
+                    .get("ApiItems")
+                    .and_then(|a| a.as_array())
+                    .unwrap_or(&vec![])
+                    .len();
+                println!(
+                    "     - {}: {} 个API端点, 基础URL: {}",
+                    name, api_count, base_url
+                );
             }
         }
     }
@@ -185,12 +201,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     async fn load_config_for_env(env: &str) -> Result<String, String> {
         match env {
-            "development" | "dev" => {
-                Ok(fs::read_to_string("samples/dev_config.json").await.map_err(|e| e.to_string())?)
-            }
-            "production" | "prod" => {
-                Ok(fs::read_to_string("samples/prod_config.json").await.map_err(|e| e.to_string())?)
-            }
+            "development" | "dev" => Ok(fs::read_to_string("samples/dev_config.json")
+                .await
+                .map_err(|e| e.to_string())?),
+            "production" | "prod" => Ok(fs::read_to_string("samples/prod_config.json")
+                .await
+                .map_err(|e| e.to_string())?),
             "testing" | "test" => {
                 // 返回一个测试配置
                 let test_config = r#"
@@ -212,9 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }"#;
                 Ok(test_config.to_string())
             }
-            _ => {
-                Err(format!("不支持的环境: {}", env))
-            }
+            _ => Err(format!("不支持的环境: {}", env)),
         }
     }
 
@@ -227,7 +241,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|e| e.to_string())
                     .unwrap_or_default();
 
-                let service_count = config_json.get("ServiceItems")
+                let service_count = config_json
+                    .get("ServiceItems")
                     .and_then(|s| s.as_array())
                     .map(|arr| arr.len())
                     .unwrap_or(0);
@@ -244,14 +259,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 示例6: 配置热重载演示
     println!("6. 配置热重载示例:");
 
-    println!("   🔄 配置热重载功能:");
-    println!("   - 检测配置文件变更 (文件系统监听)");
-    println!("   - 重新加载配置，不影响正在进行的请求");
-    println!("   - 平滑过渡，避免服务中断");
-    println!("   - 配置验证和错误回滚");
+    println!("   🔄 启动配置热重载监听...");
+    match watch_config() {
+        Ok(_) => {
+            println!("   ✅ 监听已启动: {}", is_watching_config());
+            println!("   提示: 修改 caller.json 后配置将自动重新加载");
+            println!("   等待 3 秒测试自动重载...\n");
+
+            // 模拟配置变更检测
+            let original_content = fs::read_to_string("caller.json").await?;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
+            // 演示手动重载
+            println!("   手动触发配置重载...");
+            if let Err(e) = reload_config() {
+                println!("   ❌ 重载失败: {}", e);
+            } else {
+                println!("   ✅ 手动重载成功");
+            }
+
+            // 停止监听
+            stop_watch_config();
+            println!("   监听已停止: {}", !is_watching_config());
+        }
+        Err(e) => {
+            println!("   ❌ 启动监听失败: {}", e);
+        }
+    }
     println!();
 
-    // 示例7: 配置文件对比分析
+    // 示例7: 配置热重载 API 详解
+    println!("7. 热重载 API 使用说明:");
+
+    println!("   📖 可用的热重载函数:");
+    println!("   - init_config()          - 从文件加载配置");
+    println!("   - reload_config()        - 手动重新加载配置");
+    println!("   - watch_config()         - 启动文件监听（默认 500ms 防抖）");
+    println!("   - watch_config_with_debounce(d) - 自定义防抖时间");
+    println!("   - stop_watch_config()    - 停止文件监听");
+    println!("   - is_watching_config()   - 检查是否正在监听");
+    println!("   - is_config_loaded()     - 检查配置是否已加载");
+    println!();
+
+    // 示例8: 配置文件对比分析
     println!("7. 配置文件对比分析:");
 
     // 读取原始配置文件
@@ -264,19 +314,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("   🔍 配置对比分析:");
 
-    let orig_services = original_json.get("ServiceItems")
+    let orig_services = original_json
+        .get("ServiceItems")
         .and_then(|s| s.as_array())
         .unwrap_or(&vec![])
         .len();
 
-    let dev_services = dev_json.get("ServiceItems")
+    let dev_services = dev_json
+        .get("ServiceItems")
         .and_then(|s| s.as_array())
         .unwrap_or(&vec![])
         .len();
 
     println!("   - 原配置服务数量: {}", orig_services);
     println!("   - 开发配置服务数量: {}", dev_services);
-    println!("   - 开发配置 Overrides: {}", if dev_services > 0 { "是" } else { "否" });
+    println!(
+        "   - 开发配置 Overrides: {}",
+        if dev_services > 0 { "是" } else { "否" }
+    );
 
     // 清理示例配置文件
     fs::remove_file("samples/dev_config.json").await.ok();

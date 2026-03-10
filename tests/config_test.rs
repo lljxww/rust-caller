@@ -1,5 +1,5 @@
-use caller::domain::api_result::ApiResult;
 use caller::CallerError;
+use caller::domain::api_result::ApiResult;
 use reqwest::StatusCode;
 
 #[test]
@@ -27,7 +27,7 @@ fn test_api_result_invalid_json() {
     match result.unwrap_err() {
         CallerError::JsonError(msg) => {
             assert!(msg.contains("Failed to parse JSON response"));
-        },
+        }
         _ => panic!("Expected JsonError"),
     }
 }
