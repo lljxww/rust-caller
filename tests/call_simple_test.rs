@@ -7,7 +7,7 @@ async fn test_call_basic_get() {
     assert!(result.is_ok(), "Basic GET call should succeed");
     let api_result = result.unwrap();
     assert_eq!(api_result.status_code, 200);
-    assert!(api_result.raw.len() > 0);
+    assert!(!api_result.raw.is_empty());
 }
 
 #[tokio::test]

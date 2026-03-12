@@ -10,7 +10,7 @@ async fn test_call_list_posts() {
     let api_result = result.unwrap();
 
     assert_eq!(api_result.status_code, 200);
-    assert!(api_result.raw.len() > 0);
+    assert!(!api_result.raw.is_empty());
 
     // Debug the raw response
     println!(
@@ -93,7 +93,7 @@ async fn test_call_filter_posts() {
     let api_result = result.unwrap();
 
     assert_eq!(api_result.status_code, 200);
-    assert!(api_result.raw.len() > 0);
+    assert!(!api_result.raw.is_empty());
 
     // Check that we got an array response
     let first_result = api_result.get("0");
@@ -124,7 +124,7 @@ async fn test_call_with_query_params() {
     let api_result = result.unwrap();
 
     assert_eq!(api_result.status_code, 200);
-    assert!(api_result.raw.len() > 0);
+    assert!(!api_result.raw.is_empty());
 }
 
 #[tokio::test]
