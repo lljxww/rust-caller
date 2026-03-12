@@ -98,8 +98,8 @@ impl DownloadResult {
 
     /// Override the auto-detected file extension with a custom one
     pub fn with_extension(mut self, extension: &str) -> Self {
-        let ext = if extension.starts_with('.') {
-            extension[1..].to_string()
+        let ext = if let Some(stripped) = extension.strip_prefix('.') {
+            stripped.to_string()
         } else {
             extension.to_string()
         };

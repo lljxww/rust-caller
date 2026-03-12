@@ -107,7 +107,7 @@ impl CallerContext {
         let status_code = response.status();
         let result = response.text().await?;
 
-        Ok(ApiResult::build(result, status_code)?)
+        ApiResult::build(result, status_code)
     }
 
     pub async fn download(
@@ -177,10 +177,10 @@ impl CallerContext {
         }
 
         // Try to extract filename from Content-Disposition header
-        if let Some(disposition) = content_disposition {
-            if let Some(filename) = extract_filename_from_disposition(&disposition) {
-                download_result = download_result.with_filename(filename);
-            }
+        if let Some(disposition) = content_disposition
+            && let Some(filename) = extract_filename_from_disposition(&disposition)
+        {
+            download_result = download_result.with_filename(filename);
         }
 
         Ok(download_result)
@@ -233,9 +233,9 @@ fn extract_filename_from_disposition(disposition: &str) -> Option<String> {
         let rest = &disposition[start + 9..];
         
         // Filename can be in quotes
-        if rest.starts_with('"') {
-            if let Some(end) = rest[1..].find('"') {
-                return Some(rest[1..end + 1].to_string());
+        if let Some(stripped) = rest.strip_prefix('"') {
+            if let Some(end) = stripped.find('"') {
+                return Some(stripped[..end].to_string());
             }
         } else {
             // Filename without quotes - extract until semicolon or end
@@ -250,14 +250,14 @@ fn extract_filename_from_disposition(disposition: &str) -> Option<String> {
         let rest = &disposition[start + 10..];
         
         // Remove charset and encoding if present (e.g., "UTF-8''")
-        if let Some(prefix_end) = rest.find("'") {
-            if let Some(encoding_end) = rest[prefix_end + 1..].find("'") {
-                let encoded = &rest[prefix_end + encoding_end + 2..];
-                
-                // Decode percent-encoded characters
-                if let Ok(decoded) = percent_decode(encoded) {
-                    return Some(decoded);
-                }
+        if let Some(prefix_end) = rest.find("'")
+            && let Some(encoding_end) = rest[prefix_end + 1..].find("'")
+        {
+            let encoded = &rest[prefix_end + encoding_end + 2..];
+            
+            // Decode percent-encoded characters
+            if let Ok(decoded) = percent_decode(encoded) {
+                return Some(decoded);
             }
         }
     }
@@ -305,11 +305,10 @@ pub(crate) fn validate_path_parameters(
     provided_params: Vec<&str>,
 ) -> Result<(), CallerError> {
     let mut required_params = Vec::new();
-    let mut chars = url.chars().peekable();
     let mut current_param = String::new();
     let mut in_param = false;
 
-    while let Some(c) = chars.next() {
+    for c in url.chars() {
         match c {
             '{' => {
                 in_param = true;
@@ -354,11 +353,10 @@ pub(crate) fn substitute_path_parameters(
 
     if result.contains('{') && result.contains('}') {
         let mut unreplaced_placeholders = Vec::new();
-        let mut chars = result.chars().peekable();
-        let mut in_param = false;
         let mut current_param = String::new();
+        let mut in_param = false;
 
-        while let Some(c) = chars.next() {
+        for c in result.chars() {
             match c {
                 '{' => {
                     in_param = true;
