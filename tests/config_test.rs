@@ -35,7 +35,7 @@ fn test_api_result_invalid_json() {
 #[tokio::test]
 async fn test_method_format_validation() {
     // Test valid method through public API
-    let result = caller::call("JP.list", None).await;
+    let _result = caller::call("JP.list", None).await;
     // This should work for a valid method
 
     // Test invalid method through public API

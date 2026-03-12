@@ -35,9 +35,11 @@ pub async fn call(
 /// Returns a DownloadResult containing the downloaded content and metadata
 /// 
 /// # Examples
-/// ```
+/// ```no_run
 /// use caller::download;
 /// 
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), caller::CallerError> {
 /// // Download with auto-detected file format
 /// let result = download("api.download", None, None).await?;
 /// 
@@ -46,6 +48,8 @@ pub async fn call(
 /// 
 /// // Save the downloaded file
 /// result.save("./downloads", "myfile")?;
+/// # Ok(())
+/// # }
 /// ```
 pub async fn download(
     method: &str,

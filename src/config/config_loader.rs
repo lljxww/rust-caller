@@ -19,6 +19,12 @@ static WATCHER_TX: RwLock<Option<broadcast::Sender<()>>> = RwLock::new(None);
 
 pub struct ConfigLoader;
 
+impl Default for ConfigLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigLoader {
     pub fn new() -> Self {
         ConfigLoader
@@ -148,10 +154,10 @@ impl ConfigLoader {
 
         let mut watcher = RecommendedWatcher::new(
             move |result: notify::Result<notify::Event>| {
-                if let Ok(event) = result {
-                    if event.kind.is_modify() || event.kind.is_create() {
-                        let _ = tx_clone.send(());
-                    }
+                if let Ok(event) = result
+                    && (event.kind.is_modify() || event.kind.is_create())
+                {
+                    let _ = tx_clone.send(());
                 }
             },
             notify::Config::default(),
