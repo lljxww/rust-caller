@@ -1,57 +1,57 @@
 # Caller For Rust
 
-一个灵活、可配置的 Web API 请求库，基于 Rust 开发，支持通过 JSON 配置文件管理多个 API 端点。
+A flexible, configurable Web API request library built with Rust, supporting multiple API endpoints management through JSON configuration files.
 
-## 特性
+## Features
 
-- 🚀 **异步调用**：基于 Tokio 异步运行时，支持高并发请求
-- ⚡ **配置化管理**：通过 JSON 配置文件定义 API 端点
-- 🔄 **热重载**：支持配置文件热重载，无需重启即可更新配置
-- 🔐 **认证支持**：内置多种认证机制（header、query、basic auth）
-- 📊 **结果解析**：强大的 JSON 结果解析，支持深度路径访问
-- 🛡️ **错误处理**：完善的错误类型和错误处理机制
-- 🧪 **测试覆盖**：内置全面的单元测试和集成测试
-- 🏗️ **模块化架构**：清晰的分层架构，易于扩展和维护
+- 🚀 **Async Calls**: Built on Tokio async runtime, supports high concurrency requests
+- ⚡ **Configuration Management**: Define API endpoints through JSON configuration files
+- 🔄 **Hot Reload**: Support for configuration file hot reload, update configuration without restarting
+- 🔐 **Authentication Support**: Built-in multiple authentication mechanisms (header, query, basic auth)
+- 📊 **Result Parsing**: Powerful JSON result parsing with deep path access
+- 🛡️ **Error Handling**: Comprehensive error types and error handling mechanisms
+- 🧪 **Test Coverage**: Built-in comprehensive unit and integration tests
+- 🏗️ **Modular Architecture**: Clear layered architecture, easy to extend and maintain
 
-## 架构设计
+## Architecture Design
 
-### 项目结构
+### Project Structure
 ```
 src/
-├── core/          # 核心业务逻辑
-│   ├── context.rs # 调用上下文管理
-│   └── constants.rs # 常量定义
-├── domain/        # 领域模型
-│   ├── api_item.rs      # API 项目定义
-│   ├── api_result.rs    # API 响应结果
-│   ├── authorization.rs # 认证相关
-│   ├── caller_config.rs # 调用配置
-│   └── service_item.rs  # 服务项目定义
-├── config/        # 配置管理
-│   └── config_loader.rs # 配置加载器
-├── infra/         # 基础设施层
-│   └── http.rs     # HTTP 客户端封装
-└── shared/        # 共享模块
-    └── error.rs    # 错误定义
+├── core/          # Core business logic
+│   ├── context.rs # Call context management
+│   └── constants.rs # Constant definitions
+├── domain/        # Domain models
+│   ├── api_item.rs      # API item definitions
+│   ├── api_result.rs    # API response results
+│   ├── authorization.rs # Authentication related
+│   ├── caller_config.rs # Call configuration
+│   └── service_item.rs  # Service item definitions
+├── config/        # Configuration management
+│   └── config_loader.rs # Configuration loader
+├── infra/         # Infrastructure layer
+│   └── http.rs     # HTTP client wrapper
+└── shared/        # Shared modules
+    └── error.rs    # Error definitions
 ```
 
-### 工作流程
-1. **配置加载**：从 JSON 文件加载 API 配置
-2. **上下文管理**：管理调用上下文和中间件
-3. **HTTP 调用**：构造和发送 HTTP 请求
-4. **结果处理**：解析和格式化响应结果
+### Workflow
+1. **Configuration Loading**: Load API configuration from JSON file
+2. **Context Management**: Manage call context and middleware
+3. **HTTP Call**: Construct and send HTTP requests
+4. **Result Processing**: Parse and format response results
 
-## 快速开始
+## Quick Start
 
-### 添加依赖
+### Add Dependency
 
 ```toml
 [dependencies]
-caller = "0.1.0"
+caller = "0.2.0"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
-### 基本使用
+### Basic Usage
 
 ```rust
 use caller::call;
@@ -59,19 +59,19 @@ use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 简单调用
+    // Simple call
     let result = call("JP.list", None).await?;
 
-    // 解析结果
+    // Parse result
     println!("Status: {}", result.status_code);
     println!("Raw response: {}", result.raw);
 
-    // 获取特定字段
+    // Get specific field
     if let Some(first_title) = result.get_as_str("0.title") {
         println!("First post title: {}", first_title);
     }
 
-    // 带参数调用
+    // Call with parameters
     let params = HashMap::from([
         ("post_id".to_string(), "1".to_string()),
         ("userId".to_string(), "1".to_string()),
@@ -82,9 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## 配置文件
+## Configuration File
 
-创建 `caller.json` 配置文件来定义 API 端点：
+Create a `caller.json` configuration file to define API endpoints:
 
 ```json
 {
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           "Url": "/side/hotSearch",
           "HttpMethod": "GET",
           "ParamType": "query",
-          "Description": "获取微博热搜",
+          "Description": "Get Weibo hot search",
           "Timeout": 5000,
           "NeedCache": true,
           "CacheTime": 300
@@ -137,19 +137,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### 参数类型说明
+### Parameter Types
 
-| 参数类型 | 描述 | 示例 |
-|---------|------|------|
-| `none` | 无参数 | `/posts` |
-| `query` | 查询参数 | `/posts?userId=1&id=1` |
-| `path` | 路径参数 | `/posts/1` |
-| `json` | JSON 请求体 | `{"title": "Hello", "body": "World"}` |
-| `path,json` | 路径参数 + JSON 体 | `/posts/1` + `{"title": "Updated"}` |
+| Parameter Type | Description | Example |
+|---------------|-------------|----------|
+| `none` | No parameters | `/posts` |
+| `query` | Query parameters | `/posts?userId=1&id=1` |
+| `path` | Path parameters | `/posts/1` |
+| `json` | JSON request body | `{"title": "Hello", "body": "World"}` |
+| `path,json` | Path parameters + JSON body | `/posts/1` + `{"title": "Updated"}` |
 
-## API 参考
+## API Reference
 
-### 主要类型
+### Main Types
 
 #### `ApiResult`
 ```rust
@@ -173,115 +173,123 @@ pub enum CallerError {
 }
 ```
 
-### 核心方法
+### Core Methods
 
 #### `api_result.get_as_str(key: &str) -> Option<&str>`
-获取字符串类型的值，支持深度路径如 `"0.title"`
+Get string value, supports deep path like `"0.title"`
 
 #### `api_result.get_as_i64(key: &str) -> Option<i64>`
-获取整数值
+Get integer value
 
 #### `api_result.get_as_bool(key: &str) -> Option<bool>`
-获取布尔值
+Get boolean value
 
 #### `api_result.get(key: &str) -> Option<&Value>`
-获取原生 JSON 值
+Get native JSON value
 
-### 配置热重载
+### Configuration Hot Reload
 
-Caller 支持配置文件热重载，无需重启程序即可更新 API 配置。
+Caller supports configuration file hot reload, update API configuration without restarting the program.
 
 ```rust
 use caller::{call, init_config, reload_config, watch_config, stop_watch_config, is_watching_config};
 
-// 初始化配置（通常在应用启动时调用）
+// Initialize configuration (usually called when application starts)
 init_config()?;
 
-// 手动重新加载配置
+// Manually reload configuration
 reload_config()?;
 
-// 启动文件监听，自动检测配置文件变更
-// 使用默认 500ms 防抖时间
+// Start file watching, automatically detect configuration file changes
+// Use default 500ms debounce time
 watch_config()?;
 
-// 或使用自定义防抖时间（最小 100ms）
+// Or use custom debounce time (minimum 100ms)
 use std::time::Duration;
 watch_config_with_debounce(Duration::from_millis(1000))?;
 
-// 检查是否正在监听
+// Check if watching
 if is_watching_config() {
-    println!("配置文件正在被监听");
+    println!("Configuration file is being watched");
 }
 
-// 停止监听
+// Stop watching
 stop_watch_config();
 ```
 
-### 公共 API
+### Public API
 
 #### `call(method: &str, params: Option<HashMap<String, String>>) -> Result<ApiResult, CallerError>`
 ```rust
 use caller::call;
 use std::collections::HashMap;
 
-// 无参数调用
+// Call without parameters
 let result = call("JP.list", None).await?;
 
-// 带参数调用
+// Call with parameters
 let params = HashMap::from([
     ("post_id".to_string(), "1".to_string()),
 ]);
 let result = call("JP.get", Some(params)).await?;
 ```
 
-## 测试
+## Testing
 
-运行所有测试：
+Run all tests:
 
 ```bash
 cargo test
 ```
 
-运行特定测试：
+Run specific tests:
 
 ```bash
 cargo test test_call_list_posts
 ```
 
-## 构建和发布
+## Build and Release
 
 ```bash
-# 构建
+# Build
 cargo build
 
-# 运行示例
+# Run examples
 cargo run --example basic_usage
 
-# 格式化代码
+# Format code
 cargo fmt
 
-# 检查代码
+# Check code
 cargo check
 ```
 
-## 贡献指南
+## Contributing
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
+1. Fork this repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Create a Pull Request
 
-## 许可证
+## License
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
 
-## 更新日志
+## Changelog
+
+### v0.2.0
+- **Multi-format Configuration Support**: Add support for JSON, YAML, and TOML configuration file formats
+- **Configuration Format Conversion**: Add configuration file format conversion capabilities (convert between JSON, YAML, and TOML)
+- **Serialization Support**: Add Serialize trait to all configuration structures
+- **Complete Examples**: Create complete configuration file examples in all three formats
+- **Comprehensive Tests**: Add 16 multi-format configuration test cases
+- **Documentation**: Update documentation to explain multi-format support and format conversion
 
 ### v0.1.0
-- 初始版本发布
-- 支持基于配置文件的 API 调用
-- 支持多种 HTTP 方法和参数类型
-- 内置认证和缓存支持
-- 完善的错误处理
-- 全面的测试覆盖
+- Initial release
+- Support for configuration-based API calls
+- Support for multiple HTTP methods and parameter types
+- Built-in authentication and caching support
+- Comprehensive error handling
+- Full test coverage
