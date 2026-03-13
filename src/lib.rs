@@ -24,6 +24,37 @@ pub async fn call(
     core::context::CallerContext::call(method, params).await
 }
 
+/// Main public API function with retry support
+/// 
+/// # Arguments
+/// * `method` - API method in format "service.api"
+/// * `params` - Optional parameters for the request
+/// * `retry_config` - Retry configuration
+/// 
+/// # Examples
+/// ```no_run
+/// use caller::{call_with_retry, RetryConfig};
+/// use std::collections::HashMap;
+/// use std::time::Duration;
+/// 
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), caller::CallerError> {
+/// let retry_config = RetryConfig::new()
+///     .with_max_retries(3)
+///     .with_base_delay(Duration::from_millis(500));
+/// 
+/// let result = call_with_retry("jsonplaceholder.posts.list", None, retry_config).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn call_with_retry(
+    method: &str,
+    params: Option<HashMap<String, String>>,
+    retry_config: domain::retry_config::RetryConfig,
+) -> Result<domain::api_result::ApiResult, CallerError> {
+    core::context::CallerContext::call_with_retry(method, params, retry_config).await
+}
+
 /// Download file from API endpoint
 /// 
 /// # Arguments

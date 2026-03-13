@@ -1,5 +1,6 @@
 use super::constants;
 use crate::config::config_loader::ConfigLoader;
+use crate::domain::retry_config::RetryConfig;
 use crate::domain::service_item::ServiceItem;
 use crate::domain::{api_item::ApiItem, api_result::ApiResult, download_result::DownloadResult};
 use crate::shared::error::CallerError;
@@ -108,6 +109,93 @@ impl CallerContext {
         let result = response.text().await?;
 
         ApiResult::build(result, status_code)
+    }
+
+    /// Call API with retry support using exponential backoff
+    pub async fn call_with_retry(
+        method: &str,
+        params: Option<HashMap<String, String>>,
+        retry_config: RetryConfig,
+    ) -> Result<ApiResult, CallerError> {
+        let context = CallerContext::build(method, params)?;
+        let client = reqwest::Client::new();
+
+        let mut last_error: Option<CallerError> = None;
+        let mut attempt = 0u32;
+
+        while attempt <= retry_config.max_retries {
+            if attempt > 0 {
+                let delay = retry_config.calculate_delay(attempt - 1);
+                tokio::time::sleep(delay).await;
+            }
+
+            let mut rb = client
+                .request(context.http_method.clone(), &context.url)
+                .header(header::USER_AGENT, constants::UA)
+                .header(header::CONTENT_TYPE, constants::DEFAULT_CONTENT_TYPE);
+
+            if let Some(params_map) = &context.params {
+                // Parse parameter types (supports single type like "path" or combined like "path,json")
+                let param_type_lower = context.api_item.param_type.to_lowercase();
+                let param_types: Vec<&str> = param_type_lower.split(',').collect();
+
+                // Handle each parameter type
+                for param_type in param_types {
+                    match param_type.trim() {
+                        "query" => rb = rb.query(params_map),
+                        "json" => rb = rb.json(params_map),
+                        "form" => rb = rb.form(params_map),
+                        "path" => {
+                            // Path parameters were already substituted in URL construction
+                            // No additional processing needed for request body
+                        }
+                        "none" => {
+                            // No parameters needed for the request body
+                        }
+                        unsupported => {
+                            return Err(CallerError::parameter_error(format!(
+                                "Unsupported parameter type: {}",
+                                unsupported
+                            )));
+                        }
+                    }
+                }
+            }
+
+            match rb.send().await {
+                Ok(response) => {
+                    let status_code = response.status();
+                    let status = status_code.as_u16();
+
+                    // Check if we should retry based on status code
+                    if retry_config.should_retry_status(status) && attempt < retry_config.max_retries {
+                        last_error = Some(CallerError::HttpError(format!(
+                            "HTTP {} - Retrying (attempt {}/{})",
+                            status, attempt + 1, retry_config.max_retries
+                        )));
+                        attempt += 1;
+                        continue;
+                    }
+
+                    let result = response.text().await?;
+                    return ApiResult::build(result, status_code);
+                }
+                Err(e) => {
+                    // Check if we should retry on network error
+                    if retry_config.retry_on_network_error && attempt < retry_config.max_retries {
+                        last_error = Some(CallerError::from(e));
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(CallerError::from(e));
+                }
+            }
+        }
+
+        // All retries exhausted
+        Err(last_error.unwrap_or_else(|| {
+            CallerError::HttpError("All retry attempts exhausted".to_string())
+        }))
     }
 
     pub async fn download(
