@@ -1,0 +1,42 @@
+# 文档说明: 这是一个完整的 API 配置文件示例，展示了 Caller 支持的各种配置选项
+# 支持 YAML 和 YML 两种扩展名
+# 注意：字段名需要使用 PascalCase 格式以匹配 Rust 结构体的 serde rename 配置
+
+Authorizations:
+  - Name: BearerAuth
+    AuthorizationInfo: Bearer your-secret-api-token-here
+  
+  - Name: ContentTypeAuth
+    AuthorizationInfo: Content-Type application/json; charset=utf-8
+  
+  - Name: CustomHeaderAuth
+    AuthorizationInfo: X-Custom-Auth custom-auth-value
+
+ServiceItems:
+  - ApiName: GitHub_API
+    BaseUrl: https://api.github.com
+    Timeout: 10000
+    ApiItems:
+      - Method: get_user
+        Url: /users/{username}
+        HttpMethod: GET
+        ParamType: path
+      
+      - Method: get_user_repos
+        Url: /users/{username}/repos
+        HttpMethod: GET
+        ParamType: path,query
+      
+      - Method: create_issue
+        Url: /repos/{owner}/{repo}/issues
+        HttpMethod: POST
+        ParamType: path,json
+
+  - ApiName: Weather_API
+    BaseUrl: https://api.openweathermap.org/data/2.5
+    Timeout: 5000
+    ApiItems:
+      - Method: get_current_weather
+        Url: /weather
+        HttpMethod: GET
+        ParamType: query

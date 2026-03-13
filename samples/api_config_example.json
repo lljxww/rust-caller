@@ -1,451 +1,56 @@
 {
-  "文档说明": "这是一个完整的 API 配置文件示例，展示了 Caller 支持的各种配置选项",
-
-  "authorizations": [
+  "Authorizations": [
     {
-      "name": "BearerAuth",
-      "header_name": "Authorization",
-      "type": "Bearer",
-      "token": "your-secret-api-token-here"
+      "Name": "BearerAuth",
+      "AuthorizationInfo": "Bearer your-secret-api-token-here"
     },
     {
-      "name": "ContentTypeAuth",
-      "header_name": "Content-Type",
-      "type": "Header",
-      "value": "application/json; charset=utf-8"
+      "Name": "ContentTypeAuth",
+      "AuthorizationInfo": "Content-Type application/json; charset=utf-8"
     },
     {
-      "name": "QueryParamAuth",
-      "type": "Query",
-      "param_name": "api_key",
-      "token": "your-query-api-key"
-    },
-    {
-      "name": "BasicAuth",
-      "header_name": "Authorization",
-      "type": "Basic",
-      "username": "your-username",
-      "password": "your-password"
-    },
-    {
-      "name": "CustomHeaderAuth",
-      "header_name": "X-Custom-Auth",
-      "type": "Header",
-      "value": "custom-auth-value"
+      "Name": "CustomHeaderAuth",
+      "AuthorizationInfo": "X-Custom-Auth custom-auth-value"
     }
   ],
-
-  "service_items": [
+  "ServiceItems": [
     {
-      "api_name": "GitHub_API",
-      "base_url": "https://api.github.com",
-      "description": "GitHub REST API 服务",
-      "timeout": 10000,
-      "headers": {
-        "Accept": "application/vnd.github.v3+json"
-      },
-      "api_items": [
+      "ApiName": "GitHub_API",
+      "BaseUrl": "https://api.github.com",
+      "Timeout": 10000,
+      "ApiItems": [
         {
-          "method": "get_user",
-          "url": "/users/{username}",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "获取用户信息",
-          "timeout": 8000,
-          "need_cache": true,
-          "cache_time": 300,
-          "content_type": null,
-          "authorization_type": "BearerAuth",
-          "headers": {
-            "X-RateLimit-Reset": "true"
-          }
+          "Method": "get_user",
+          "Url": "/users/{username}",
+          "HttpMethod": "GET",
+          "ParamType": "path"
         },
         {
-          "method": "get_user_repos",
-          "url": "/users/{username}/repos",
-          "http_method": "GET",
-          "param_type": "path,query",
-          "description": "获取用户的仓库列表",
-          "timeout": 15000,
-          "need_cache": false,
-          "cache_time": 60,
-          "content_type": null,
-          "authorization_type": "BearerAuth",
-          "query_params": [
-            {
-              "param_name": "type",
-              "default_value": "all",
-              "description": "仓库类型：all, owner, public, private, member"
-            },
-            {
-              "param_name": "sort",
-              "default_value": "updated",
-              "description": "排序方式：created, updated, pushed, full_name"
-            },
-            {
-              "param_name": "direction",
-              "default_value": "desc",
-              "description": "排序方向：asc, desc"
-            }
-          ]
+          "Method": "get_user_repos",
+          "Url": "/users/{username}/repos",
+          "HttpMethod": "GET",
+          "ParamType": "path,query"
         },
         {
-          "method": "get_repo",
-          "url": "/repos/{owner}/{repo}",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "获取特定仓库信息",
-          "timeout": 10000,
-          "need_cache": true,
-          "cache_time": 1800,
-          "authorization_type": "BearerAuth"
-        },
-        {
-          "method": "create_issue",
-          "url": "/repos/{owner}/{repo}/issues",
-          "http_method": "POST",
-          "param_type": "path,json",
-          "description": "在仓库中创建 Issue",
-          "timeout": 20000,
-          "need_cache": false,
-          "content_type": "application/json",
-          "authorization_type": "BearerAuth"
-        },
-        {
-          "method": "get_repository_contributors",
-          "url": "/repos/{owner}/{repo}/contributors",
-          "http_method": "GET",
-          "param_type": "path,query",
-          "description": "获取仓库贡献者列表",
-          "timeout": 12000,
-          "query_params": [
-            {
-              "param_name": "anon",
-              "default_value": "false",
-              "description": "是否包含匿名贡献者"
-            }
-          ],
-          "authorization_type": "BearerAuth"
+          "Method": "create_issue",
+          "Url": "/repos/{owner}/{repo}/issues",
+          "HttpMethod": "POST",
+          "ParamType": "path,json"
         }
       ]
     },
-
     {
-      "api_name": "Weather_API",
-      "base_url": "https://api.openweathermap.org/data/2.5",
-      "description": "天气查询 API",
-      "timeout": 5000,
-      "api_items": [
+      "ApiName": "Weather_API",
+      "BaseUrl": "https://api.openweathermap.org/data/2.5",
+      "Timeout": 5000,
+      "ApiItems": [
         {
-          "method": "get_current_weather",
-          "url": "/weather",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "获取当前天气",
-          "timeout": 5000,
-          "need_cache": true,
-          "cache_time": 600,
-          "authorization_type": "QueryParamAuth",
-          "query_params": [
-            {
-              "param_name": "q",
-              "default_value": "Beijing",
-              "description": "城市名称或邮编",
-              "required": true
-            },
-            {
-              "param_name": "appid",
-              "default_value": "your-weather-api-key",
-              "description": "API 密钥",
-              "required": true
-            },
-            {
-              "param_name": "units",
-              "default_value": "metric",
-              "description": "温度单位：metric（摄氏度）、imperial（华氏度）、standard（开尔文）"
-            },
-            {
-              "param_name": "lang",
-              "default_value": "zh_cn",
-              "description": "返回语言：zh_cn 中文"
-            }
-          ]
-        },
-        {
-          "method": "get_forecast",
-          "url": "/forecast",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "获取5天天气预报",
-          "timeout": 8000,
-          "need_cache": true,
-          "cache_time": 3600,
-          "authorization_type": "QueryParamAuth",
-          "query_params": [
-            {
-              "param_name": "q",
-              "required": true,
-              "description": "城市名称"
-            },
-            {
-              "param_name": "cnt",
-              "default_value": "40",
-              "description": "预报时间点数量（最多40个）"
-            }
-          ]
-        },
-        {
-          "method": "get_weather_map",
-          "url": "/weathermap",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "获取天气地图",
-          "timeout": 10000,
-          "need_cache": false,
-          "authorization_type": "QueryParamAuth"
-        }
-      ]
-    },
-
-    {
-      "api_name": "News_API",
-      "base_url": "https://newsapi.org/v2",
-      "description": "新闻 API",
-      "timeout": 15000,
-      "api_items": [
-        {
-          "method": "get_top_headlines",
-          "url": "/top-headlines",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "获取头条新闻",
-          "timeout": 10000,
-          "need_cache": true,
-          "cache_time": 900,
-          "authorization_type": "BearerAuth",
-          "query_params": [
-            {
-              "param_name": "country",
-              "default_value": "us",
-              "description": "国家代码：cn, us, gb, jp 等"
-            },
-            {
-              "param_name": "category",
-              "default_value": "general",
-              "description": "分类：business, entertainment, general, health, science, sports, technology"
-            },
-            {
-              "param_name": "pageSize",
-              "default_value": "20",
-              "description": "每页结果数量（最多100）"
-            },
-            {
-              "param_name": "page",
-              "default_value": "1",
-              "description": "页码"
-            }
-          ]
-        },
-        {
-          "method": "search_news",
-          "url": "/everything",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "搜索新闻",
-          "timeout": 15000,
-          "authorization": "BearerAuth",
-          "query_params": [
-            {
-              "param_name": "q",
-              "required": true,
-              "description": "搜索关键词"
-            },
-            {
-              "param_name": "sortBy",
-              "default_value": "publishedAt",
-              "description": "排序方式：relevancy, popularity, publishedAt"
-            },
-            {
-              "param_name": "language",
-              "default_value": "zh",
-              "description": "语言代码：zh 中文"
-            }
-          ]
-        },
-        {
-          "method": "get_sources",
-          "url": "/top-headlines/sources",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "获取新闻源列表",
-          "timeout": 8000,
-          "authorization": "BearerAuth"
-        }
-      ]
-    },
-
-    {
-      "api_name": "Translation_API",
-      "base_url": "https://api.mymemory.translated.net",
-      "description": "翻译 API",
-      "timeout": 30000,
-      "api_items": [
-        {
-          "method": "translate",
-          "url": "/get",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "文本翻译",
-          "timeout": 20000,
-          "need_cache": true,
-          "cache_time": 86400,
-          "query_params": [
-            {
-              "param_name": "q",
-              "required": true,
-              "description": "要翻译的文本"
-            },
-            {
-              "param_name": "langpair",
-              "required": true,
-              "description": "翻译语言对，如：en|zh 中文"
-            }
-          ]
-        }
-      ]
-    },
-
-    {
-      "api_name": "Docker_Registry",
-      "base_url": "https://registry.hub.docker.com",
-      "description": "Docker Registry API",
-      "timeout": 10000,
-      "api_items": [
-        {
-          "method": "search_repositories",
-          "url": "/v2/repositories/search",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "搜索 Docker 仓库",
-          "timeout": 15000,
-          "authorization_type": "BasicAuth",
-          "query_params": [
-            {
-              "param_name": "page",
-              "default_value": "1",
-              "description": "页码"
-            },
-            {
-              "param_name": "page_size",
-              "default_value": "100",
-              "description": "每页数量"
-            }
-          ]
-        },
-        {
-          "method": "get_repository_info",
-          "url": "/v2/repositories/{namespace}/{repository}/",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "获取仓库详细信息",
-          "timeout": 10000,
-          "authorization_type": "None"
-        },
-        {
-          "method": "get_repository_tags",
-          "url": "/v2/repositories/{namespace}/{repository}/tags/",
-          "http_method": "GET",
-          "param_type": "path,query",
-          "description": "获取仓库标签列表",
-          "timeout": 12000,
-          "authorization_type": "None",
-          "query_params": [
-            {
-              "param_name": "page",
-              "default_value": "1",
-              "description": "页码"
-            },
-            {
-              "param_name": "page_size",
-              "default_value": "10",
-              "description": "每页标签数量"
-            }
-          ]
-        }
-      ]
-    },
-
-    {
-      "api_name": "Mock_Data_API",
-      "base_url": "https://jsonplaceholder.typicode.com",
-      "description": "模拟数据 API（用于测试）",
-      "timeout": 5000,
-      "api_items": [
-        {
-          "method": "get_users",
-          "url": "/users",
-          "http_method": "GET",
-          "param_type": "query",
-          "description": "获取所有用户",
-          "need_cache": false,
-          "cache_time": 60
-        },
-        {
-          "method": "get_user_posts",
-          "url": "/users/{userId}/posts",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "获取用户的文章",
-          "need_cache": false,
-          "cache_time": 30
-        },
-        {
-          "method": "create_user_post",
-          "url": "/users/{userId}/posts",
-          "http_method": "POST",
-          "param_type": "path,json",
-          "description": "为用户创建文章",
-          "content_type": "application/json",
-          "need_cache": false,
-          "cache_time": 0
-        },
-        {
-          "method": "get_post_comments",
-          "url": "/posts/{postId}/comments",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "获取文章评论",
-          "need_cache": false,
-          "cache_time": 120
+          "Method": "get_current_weather",
+          "Url": "/weather",
+          "HttpMethod": "GET",
+          "ParamType": "query"
         }
       ]
     }
-  ],
-
-  "全局配置": {
-    "default_timeout": 10000,
-    "default_cache_time": 300,
-    "default_authorization": "None",
-    "retry_config": {
-      "max_retries": 3,
-      "retry_delay_ms": 1000,
-      "retryable_status_codes": [408, 429, 500, 502, 503, 504]
-    },
-    "logging_config": {
-      "enable_request_logging": true,
-      "enable_response_logging": true,
-      "max_log_length": 1000
-    },
-    "rate_limiting": {
-      "enable_rate_limit": true,
-      "requests_per_second": 10,
-      "burst_size": 50
-    },
-    "circuit_breaker": {
-      "enable_circuit_breaker": false,
-      "failure_threshold": 5,
-      "recovery_timeout_s": 60,
-      "_half_open_requests": 3
-    }
-  }
+  ]
 }

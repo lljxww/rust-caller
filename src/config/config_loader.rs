@@ -11,6 +11,31 @@ use crate::{
     domain::service_item::ServiceItem,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigFormat {
+    Json,
+    Yaml,
+    Toml,
+}
+
+impl ConfigFormat {
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "json" => Some(ConfigFormat::Json),
+            "yaml" | "yml" => Some(ConfigFormat::Yaml),
+            "toml" => Some(ConfigFormat::Toml),
+            _ => None,
+        }
+    }
+
+    pub fn detect_from_path(path: &str) -> Option<Self> {
+        Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
+    }
+}
+
 static CONFIG_PATH: &str = "./caller.json";
 
 static CONFIG: RwLock<Option<CallerConfig>> = RwLock::new(None);
@@ -126,9 +151,54 @@ impl ConfigLoader {
         Self::load_config_from_path(CONFIG_PATH)
     }
 
-    fn load_config_from_path(path: &str) -> Result<CallerConfig, Box<dyn Error>> {
+    pub fn load_config_from_path(path: &str) -> Result<CallerConfig, Box<dyn Error>> {
         let config_content = fs::read_to_string(path)?;
-        let caller_config = serde_json::from_str(&config_content)?;
+        
+        let format = ConfigFormat::detect_from_path(path)
+            .ok_or_else(|| CallerError::ConfigError(format!(
+                "Unsupported config file format for path: {}. Supported formats: .json, .yaml, .yml, .toml",
+                path
+            )))?;
+        
+        let caller_config = match format {
+            ConfigFormat::Json => {
+                serde_json::from_str(&config_content)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to parse JSON: {}", e)))?
+            }
+            ConfigFormat::Yaml => {
+                serde_yaml::from_str(&config_content)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to parse YAML: {}", e)))?
+            }
+            ConfigFormat::Toml => {
+                toml::from_str(&config_content)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to parse TOML: {}", e)))?
+            }
+        };
+        
+        Ok(caller_config)
+    }
+
+    pub fn load_config_from_path_with_format(
+        path: &str,
+        format: ConfigFormat,
+    ) -> Result<CallerConfig, Box<dyn Error>> {
+        let config_content = fs::read_to_string(path)?;
+        
+        let caller_config = match format {
+            ConfigFormat::Json => {
+                serde_json::from_str(&config_content)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to parse JSON: {}", e)))?
+            }
+            ConfigFormat::Yaml => {
+                serde_yaml::from_str(&config_content)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to parse YAML: {}", e)))?
+            }
+            ConfigFormat::Toml => {
+                toml::from_str(&config_content)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to parse TOML: {}", e)))?
+            }
+        };
+        
         Ok(caller_config)
     }
 
@@ -220,5 +290,102 @@ impl ConfigLoader {
         api_item: &str,
     ) -> Result<(ServiceItem, ApiItem), CallerError> {
         Self::get_config(service_name, api_item)
+    }
+
+    /// Convert config file from one format to another
+    /// 
+    /// # Arguments
+    /// * `input_path` - Path to the input config file
+    /// * `output_path` - Path to write the converted config file
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,ignore
+    /// use caller::config::config_loader::ConfigLoader;
+    /// 
+    /// // Convert JSON to YAML
+    /// let result = ConfigLoader::convert_config("config.json", "config.yaml");
+    /// 
+    /// // Convert YAML to TOML
+    /// let result = ConfigLoader::convert_config("config.yaml", "config.toml");
+    /// ```
+    pub fn convert_config(input_path: &str, output_path: &str) -> Result<(), CallerError> {
+        // Load config from input path
+        let config = Self::load_config_from_path(input_path)?;
+        
+        // Detect output format
+        let output_format = ConfigFormat::detect_from_path(output_path)
+            .ok_or_else(|| CallerError::ConfigError(format!(
+                "Unsupported output config file format for path: {}. Supported formats: .json, .yaml, .yml, .toml",
+                output_path
+            )))?;
+        
+        // Serialize config to target format
+        let content = match output_format {
+            ConfigFormat::Json => {
+                serde_json::to_string_pretty(&config)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to serialize to JSON: {}", e)))?
+            }
+            ConfigFormat::Yaml => {
+                serde_yaml::to_string(&config)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to serialize to YAML: {}", e)))?
+            }
+            ConfigFormat::Toml => {
+                toml::to_string_pretty(&config)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to serialize to TOML: {}", e)))?
+            }
+        };
+        
+        // Write to output file
+        fs::write(output_path, content)
+            .map_err(|e| CallerError::ConfigError(format!("Failed to write output file: {}", e)))?;
+        
+        Ok(())
+    }
+
+    /// Convert config file from one format to another with explicit format specification
+    /// 
+    /// # Arguments
+    /// * `input_path` - Path to the input config file
+    /// * `output_path` - Path to write the converted config file
+    /// * `output_format` - The target format for conversion
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,ignore
+    /// use caller::config::config_loader::{ConfigLoader, ConfigFormat};
+    /// 
+    /// // Convert to YAML regardless of output file extension
+    /// let result = ConfigLoader::convert_config_with_format("config.json", "config.txt", ConfigFormat::Yaml);
+    /// ```
+    pub fn convert_config_with_format(
+        input_path: &str,
+        output_path: &str,
+        output_format: ConfigFormat,
+    ) -> Result<(), CallerError> {
+        // Load config from input path
+        let config = Self::load_config_from_path(input_path)?;
+        
+        // Serialize config to target format
+        let content = match output_format {
+            ConfigFormat::Json => {
+                serde_json::to_string_pretty(&config)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to serialize to JSON: {}", e)))?
+            }
+            ConfigFormat::Yaml => {
+                serde_yaml::to_string(&config)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to serialize to YAML: {}", e)))?
+            }
+            ConfigFormat::Toml => {
+                toml::to_string_pretty(&config)
+                    .map_err(|e| CallerError::ConfigError(format!("Failed to serialize to TOML: {}", e)))?
+            }
+        };
+        
+        // Write to output file
+        fs::write(output_path, content)
+            .map_err(|e| CallerError::ConfigError(format!("Failed to write output file: {}", e)))?;
+        
+        Ok(())
     }
 }
