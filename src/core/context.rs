@@ -6,6 +6,10 @@ use crate::domain::{api_item::ApiItem, api_result::ApiResult, download_result::D
 use crate::shared::error::CallerError;
 use reqwest::{Method, header};
 use std::collections::HashMap;
+use std::time::Duration;
+
+/// Default timeout in milliseconds (30 seconds)
+const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 pub(crate) struct CallerContext {
     #[allow(dead_code)]
@@ -68,7 +72,15 @@ impl CallerContext {
         params: Option<HashMap<String, String>>,
     ) -> Result<ApiResult, CallerError> {
         let context = CallerContext::build(method, params)?;
-        let client = reqwest::Client::new();
+        
+        // Get timeout from API config or use default
+        let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
         let mut rb = client
             .request(context.http_method, &context.url)
@@ -118,7 +130,15 @@ impl CallerContext {
         retry_config: RetryConfig,
     ) -> Result<ApiResult, CallerError> {
         let context = CallerContext::build(method, params)?;
-        let client = reqwest::Client::new();
+        
+        // Get timeout from API config or use default
+        let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
         let mut last_error: Option<CallerError> = None;
         let mut attempt = 0u32;
@@ -204,7 +224,15 @@ impl CallerContext {
         extension: Option<String>,
     ) -> Result<DownloadResult, CallerError> {
         let context = CallerContext::build(method, params)?;
-        let client = reqwest::Client::new();
+        
+        // Get timeout from API config or use default
+        let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
         let mut rb = client
             .request(context.http_method, &context.url)
