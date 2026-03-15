@@ -16,6 +16,12 @@ use std::time::Duration;
 /// Main error type for the caller library
 pub use shared::error::CallerError;
 
+// Re-export middleware types for convenience
+pub use domain::middleware::{
+    HeaderMiddleware, LoggingMiddleware, Middleware, MiddlewareChain, RequestContext,
+    ResponseContext, RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
+};
+
 /// Main public API function
 pub async fn call(
     method: &str,

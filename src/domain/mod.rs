@@ -3,6 +3,7 @@ pub mod api_result;
 pub mod authorization;
 pub mod caller_config;
 pub mod download_result;
+pub mod middleware;
 pub mod retry_config;
 pub mod service_item;
 
@@ -12,5 +13,9 @@ pub use api_result::ApiResult;
 pub use authorization::Authorization;
 pub use caller_config::CallerConfig;
 pub use download_result::DownloadResult;
+pub use middleware::{
+    HeaderMiddleware, LoggingMiddleware, Middleware, MiddlewareChain, RequestContext,
+    ResponseContext, RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
+};
 pub use retry_config::RetryConfig;
 pub use service_item::ServiceItem;
