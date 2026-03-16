@@ -1,5 +1,7 @@
 use super::constants;
 use crate::config::config_loader::ConfigLoader;
+use crate::domain::auth_trait::AuthContext;
+use crate::domain::auth_registry::AuthRegistry;
 use crate::domain::retry_config::RetryConfig;
 use crate::domain::service_item::ServiceItem;
 use crate::domain::{api_item::ApiItem, api_result::ApiResult, download_result::DownloadResult};
@@ -22,6 +24,8 @@ pub(crate) struct CallerContext {
     pub http_method: Method,
     pub url: String,
     pub params: Option<HashMap<String, String>>,
+    /// Resolved authorization type (ApiItem overrides ServiceItem)
+    pub auth_type: Option<String>,
 }
 
 impl CallerContext {
@@ -56,6 +60,12 @@ impl CallerContext {
 
         let http_method = get_http_method(&api_item.http_method)?;
 
+        // Resolve authorization type: ApiItem takes precedence over ServiceItem
+        let auth_type = api_item
+            .authorization_type
+            .clone()
+            .or_else(|| service_item.authorization_type.clone());
+
         Ok(CallerContext {
             service_name: service_name.to_string(),
             api_name: api_name.to_string(),
@@ -64,7 +74,38 @@ impl CallerContext {
             http_method,
             url,
             params,
+            auth_type,
         })
+    }
+
+    /// Create authentication context for this request
+    fn create_auth_context(&self) -> Option<AuthContext> {
+        self.auth_type.as_ref().map(|auth_type| {
+            AuthContext::new(
+                self.service_name.clone(),
+                self.api_name.clone(),
+                self.url.clone(),
+                self.api_item.http_method.clone(),
+                self.params.clone(),
+                auth_type.clone(),
+            )
+        })
+    }
+
+    /// Apply authentication to the request builder
+    async fn apply_auth(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder, CallerError> {
+        if let Some(auth_type) = &self.auth_type {
+            if let Some(provider) = AuthRegistry::get(auth_type) {
+                let context = self.create_auth_context().unwrap();
+                return provider.apply(builder, &context).await;
+            }
+            // If auth_type is specified but no provider registered, log warning but continue
+            // This allows for graceful degradation
+        }
+        Ok(builder)
     }
 
     pub async fn call(
@@ -77,13 +118,17 @@ impl CallerContext {
         let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
         let timeout = Duration::from_millis(timeout_ms as u64);
         
+        // Clone http_method before using it
+        let http_method = context.http_method.clone();
+        let url = context.url.clone();
+        
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
             .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
         let mut rb = client
-            .request(context.http_method, &context.url)
+            .request(http_method, &url)
             .header(header::USER_AGENT, constants::UA)
             .header(header::CONTENT_TYPE, constants::DEFAULT_CONTENT_TYPE);
 
@@ -114,6 +159,9 @@ impl CallerContext {
                 }
             }
         }
+
+        // Apply authentication
+        rb = context.apply_auth(rb).await?;
 
         let response = rb.send().await?;
 
@@ -182,6 +230,9 @@ impl CallerContext {
                 }
             }
 
+            // Apply authentication
+            rb = context.apply_auth(rb).await?;
+
             match rb.send().await {
                 Ok(response) => {
                     let status_code = response.status();
@@ -229,13 +280,17 @@ impl CallerContext {
         let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
         let timeout = Duration::from_millis(timeout_ms as u64);
         
+        // Clone http_method before using it
+        let http_method = context.http_method.clone();
+        let url = context.url.clone();
+        
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
             .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
         let mut rb = client
-            .request(context.http_method, &context.url)
+            .request(http_method, &url)
             .header(header::USER_AGENT, constants::UA);
 
         if let Some(params_map) = &context.params {
@@ -265,6 +320,9 @@ impl CallerContext {
                 }
             }
         }
+
+        // Apply authentication
+        rb = context.apply_auth(rb).await?;
 
         let response = rb.send().await?;
         let status_code = response.status();

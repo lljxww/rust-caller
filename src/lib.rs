@@ -3,6 +3,8 @@ pub mod config;
 pub mod core;
 pub mod domain;
 pub mod infra;
+pub mod openapi;
+pub mod server;
 pub mod shared;
 
 // Re-export public APIs for convenience
@@ -16,11 +18,21 @@ use std::time::Duration;
 /// Main error type for the caller library
 pub use shared::error::CallerError;
 
-// Re-export middleware types for convenience
-pub use domain::middleware::{
-    HeaderMiddleware, LoggingMiddleware, Middleware, MiddlewareChain, RequestContext,
-    ResponseContext, RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
+// Re-export authentication types
+pub use domain::auth_registry::AuthRegistry;
+pub use domain::auth_trait::{AuthContext, AuthProvider, Authenticator};
+pub use domain::builtin_auth::{
+    ApiKeyAuth, BasicAuth, BearerAuth, CustomHeaderAuth, DynamicApiKeyAuth, DynamicBearerAuth,
+    DynamicHeaderAuth, NoAuth, OAuth2Auth,
 };
+
+// Re-export OpenAPI types
+pub use openapi::{OpenApiDoc, OpenApiGenerator};
+pub use server::ServerConfig;
+
+// Re-export server types when server feature is enabled
+#[cfg(feature = "server")]
+pub use server::start_server;
 
 /// Main public API function
 pub async fn call(
@@ -132,4 +144,138 @@ pub fn is_watching_config() -> bool {
 /// Check if the configuration is loaded
 pub fn is_config_loaded() -> bool {
     config::config_loader::ConfigLoader::is_config_loaded()
+}
+
+// ============================================================================
+// Authentication API
+// ============================================================================
+
+/// Register an authenticator implementation
+/// 
+/// # Arguments
+/// * `name` - Unique name for this authentication provider
+/// * `auth` - The authenticator implementation
+/// 
+/// # Example
+/// ```rust
+/// use caller::{register_auth, BearerAuth};
+/// 
+/// // Register a Bearer token authenticator
+/// let auth = BearerAuth::new("my-api-token".to_string());
+/// register_auth("my_bearer", auth).unwrap();
+/// ```
+pub fn register_auth(name: &str, auth: impl Authenticator + 'static) -> Result<(), CallerError> {
+    AuthRegistry::register(name, auth)
+}
+
+/// Register a closure-based authentication provider
+/// 
+/// This provides maximum flexibility for custom authentication scenarios
+/// that don't fit the trait-based approach.
+/// 
+/// # Arguments
+/// * `name` - Unique name for this authentication provider
+/// * `f` - Async closure that modifies the request builder
+/// 
+/// # Example
+/// ```rust
+/// use caller::register_auth_closure;
+/// use reqwest::RequestBuilder;
+/// use caller::AuthContext;
+/// 
+/// // Register a custom authentication closure
+/// register_auth_closure("custom_auth", |builder: RequestBuilder, ctx: &AuthContext| async move {
+///     // Full access to request builder and context
+///     Ok(builder
+///         .header("X-Api-Key", "my-key")
+///         .header("X-Request-Id", "12345"))
+/// }).unwrap();
+/// # caller::clear_auth().unwrap();
+/// ```
+pub fn register_auth_closure<F, Fut>(name: &str, f: F) -> Result<(), CallerError>
+where
+    F: Fn(reqwest::RequestBuilder, &AuthContext) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<reqwest::RequestBuilder, CallerError>> + Send + 'static,
+{
+    AuthRegistry::register_closure(name, f)
+}
+
+/// Check if an authentication provider is registered
+/// 
+/// # Arguments
+/// * `name` - Name of the authentication provider to check
+/// 
+/// # Example
+/// ```rust
+/// use caller::{register_auth, has_auth, BearerAuth};
+/// 
+/// let auth = BearerAuth::new("token".to_string());
+/// register_auth("my_auth", auth).unwrap();
+/// 
+/// assert!(has_auth("my_auth"));
+/// ```
+pub fn has_auth(name: &str) -> bool {
+    AuthRegistry::contains(name)
+}
+
+/// Update an existing authenticator
+/// 
+/// This replaces the authenticator if it exists, or adds it if it doesn't.
+/// Useful for token refresh scenarios.
+/// 
+/// # Arguments
+/// * `name` - Name of the authentication provider
+/// * `auth` - New authenticator implementation
+/// 
+/// # Example
+/// ```rust
+/// use caller::{register_auth, update_auth, BearerAuth};
+/// 
+/// // Initial registration
+/// register_auth("github", BearerAuth::new("old-token".to_string())).unwrap();
+/// 
+/// // Later, update with new token
+/// update_auth("github", BearerAuth::new("new-token".to_string())).unwrap();
+/// ```
+pub fn update_auth(name: &str, auth: impl Authenticator + 'static) -> Result<(), CallerError> {
+    AuthRegistry::update(name, auth)
+}
+
+/// Update a closure-based authentication provider
+/// 
+/// # Arguments
+/// * `name` - Name of the authentication provider
+/// * `f` - Async closure that modifies the request builder
+pub fn update_auth_closure<F, Fut>(name: &str, f: F) -> Result<(), CallerError>
+where
+    F: Fn(reqwest::RequestBuilder, &AuthContext) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<reqwest::RequestBuilder, CallerError>> + Send + 'static,
+{
+    AuthRegistry::update_closure(name, f)
+}
+
+/// Remove an authentication provider
+/// 
+/// # Arguments
+/// * `name` - Name of the authentication provider to remove
+/// 
+/// # Returns
+/// `true` if the provider was removed, `false` if it didn't exist
+pub fn remove_auth(name: &str) -> Result<bool, CallerError> {
+    AuthRegistry::remove(name)
+}
+
+/// Clear all registered authentication providers
+pub fn clear_auth() -> Result<(), CallerError> {
+    AuthRegistry::clear()
+}
+
+/// List all registered authentication provider names
+pub fn list_auth() -> Result<Vec<String>, CallerError> {
+    AuthRegistry::list()
+}
+
+/// Get the number of registered authentication providers
+pub fn auth_count() -> Result<usize, CallerError> {
+    AuthRegistry::count()
 }

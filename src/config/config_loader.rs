@@ -137,6 +137,19 @@ impl ConfigLoader {
             .unwrap_or(false)
     }
 
+    /// Get the full configuration object
+    pub fn get_full_config() -> Result<CallerConfig, CallerError> {
+        Self::ensure_config_loaded()?;
+
+        let config_guard = CONFIG
+            .read()
+            .map_err(|_| CallerError::ConfigError("Config lock poisoned".to_string()))?;
+
+        config_guard
+            .clone()
+            .ok_or(CallerError::ConfigNotInitialized)
+    }
+
     pub fn reload_config() -> Result<(), CallerError> {
         let config = Self::load_config_from_path(CONFIG_PATH)?;
         let mut config_guard = CONFIG
