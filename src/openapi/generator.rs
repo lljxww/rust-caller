@@ -110,7 +110,7 @@ impl OpenApiGenerator {
                 } else {
                     self.normalize_path(&api_item.url)
                 };
-                let operation = self.create_operation(&service, api_item);
+                let operation = self.create_operation(service, api_item);
 
                 // Get or create path item
                 let path_item = paths.entry(path.clone()).or_insert_with(|| PathItem {

@@ -7,7 +7,7 @@ use crate::server::ServerConfig;
 use crate::shared::error::CallerError;
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{Html, IntoResponse, Json},
     routing::get,
     Router,
@@ -32,8 +32,6 @@ pub async fn start_server(config: ServerConfig) -> Result<(), CallerError> {
         server_config: config.clone(),
     });
 
-    let addr_str = format!("{}", config.addr);
-    
     let app = Router::new()
         .route("/", get(index))
         .route("/openapi.json", get(openapi_json))
@@ -56,7 +54,6 @@ pub async fn start_server(config: ServerConfig) -> Result<(), CallerError> {
     println!("📖 Swagger UI: http://{}/", addr);
     println!("📄 OpenAPI JSON: http://{}/openapi.json", addr);
     println!("🔄 Proxy: http://{}/proxy/{{service}}/{{method}}?id=VALUE", addr);
-    println!("");
     println!("💡 Swagger UI 'Try it out' requests will go through caller proxy!");
 
     axum::serve(listener, app)
@@ -168,13 +165,12 @@ async fn execute_proxy(
     // Handle path parameters
     if url.contains('{') {
         // Replace path parameters
-        if let Some(id_val) = id {
+        if let Some(id_val) = id
+            && let Some(start) = url.find('{')
+            && let Some(end) = url.find('}')
+        {
             // Replace first path parameter with id value
-            if let Some(start) = url.find('{') {
-                if let Some(end) = url.find('}') {
-                    url = format!("{}{}{}", &url[..start], id_val, &url[end + 1..]);
-                }
-            }
+            url = format!("{}{}{}", &url[..start], id_val, &url[end + 1..]);
         }
         // Replace any remaining path params from extra_params
         for (key, value) in extra_params {

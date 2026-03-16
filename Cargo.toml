@@ -1,6 +1,6 @@
 [package]
 name = "caller"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license-file = "LICENSE"
 description = "A WebApi Caller"
@@ -32,3 +32,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"], optional = true }
 [[example]]
 name = "server"
 required-features = ["server"]
+
+[[example]]
+name = "config-cli"
+path = "examples/config-cli.rs"

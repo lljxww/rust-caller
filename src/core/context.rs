@@ -97,14 +97,14 @@ impl CallerContext {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder, CallerError> {
-        if let Some(auth_type) = &self.auth_type {
-            if let Some(provider) = AuthRegistry::get(auth_type) {
-                let context = self.create_auth_context().unwrap();
-                return provider.apply(builder, &context).await;
-            }
-            // If auth_type is specified but no provider registered, log warning but continue
-            // This allows for graceful degradation
+        if let Some(auth_type) = &self.auth_type
+            && let Some(provider) = AuthRegistry::get(auth_type)
+        {
+            let context = self.create_auth_context().unwrap();
+            return provider.apply(builder, &context).await;
         }
+        // If auth_type is specified but no provider registered, log warning but continue
+        // This allows for graceful degradation
         Ok(builder)
     }
 
