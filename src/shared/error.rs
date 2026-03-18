@@ -50,6 +50,9 @@ pub enum CallerError {
 
     #[error("Network error: {0}")]
     NetworkError(String),
+
+    #[error("Request blocked: {0}")]
+    RequestError(String),
 }
 
 impl From<reqwest::Error> for CallerError {

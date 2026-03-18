@@ -420,6 +420,283 @@ impl Middleware for RetryMiddleware {
     }
 }
 
+// ============================================================================
+// Circuit Breaker Middleware
+// ============================================================================
+
+/// Circuit breaker state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Circuit is closed, requests flow normally
+    Closed,
+    /// Circuit is open, requests are blocked
+    Open,
+    /// Circuit is half-open, allowing a test request
+    HalfOpen,
+}
+
+/// Middleware that implements the Circuit Breaker pattern
+///
+/// The circuit breaker prevents cascading failures by stopping requests to a failing service.
+/// After a configurable number of consecutive failures, the circuit opens and blocks requests.
+/// After a timeout period, the circuit enters a half-open state to test if the service has recovered.
+#[derive(Debug)]
+pub struct CircuitBreakerMiddleware {
+    /// Current state of the circuit breaker
+    state: std::sync::Arc<std::sync::Mutex<CircuitBreakerState>>,
+    /// Configuration for the circuit breaker
+    config: CircuitBreakerConfig,
+}
+
+/// Internal state for the circuit breaker
+#[derive(Debug)]
+struct CircuitBreakerState {
+    /// Current circuit state
+    state: CircuitState,
+    /// Number of consecutive failures
+    failure_count: u32,
+    /// Last failure timestamp (for timeout calculation)
+    last_failure_time: Option<std::time::Instant>,
+    /// Number of successful requests (for statistics)
+    success_count: u64,
+    /// Total number of blocked requests
+    blocked_count: u64,
+}
+
+/// Configuration for the Circuit Breaker
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerConfig {
+    /// Number of consecutive failures before opening the circuit
+    pub failure_threshold: u32,
+    /// Time to wait before transitioning from Open to HalfOpen (in milliseconds)
+    pub timeout_ms: u64,
+    /// Number of successful requests in HalfOpen state before closing the circuit
+    pub success_threshold: u32,
+    /// HTTP status codes that should be considered as failures
+    pub failure_status_codes: Vec<u16>,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            failure_threshold: 5,
+            timeout_ms: 30000, // 30 seconds
+            success_threshold: 2,
+            failure_status_codes: vec![500, 502, 503, 504],
+        }
+    }
+}
+
+impl CircuitBreakerConfig {
+    /// Create a new CircuitBreakerConfig with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the failure threshold
+    pub fn with_failure_threshold(mut self, threshold: u32) -> Self {
+        self.failure_threshold = threshold;
+        self
+    }
+
+    /// Set the timeout in milliseconds
+    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+
+    /// Set the success threshold for half-open state
+    pub fn with_success_threshold(mut self, threshold: u32) -> Self {
+        self.success_threshold = threshold;
+        self
+    }
+
+    /// Set the status codes that count as failures
+    pub fn with_failure_status_codes(mut self, codes: Vec<u16>) -> Self {
+        self.failure_status_codes = codes;
+        self
+    }
+}
+
+impl CircuitBreakerMiddleware {
+    /// Create a new CircuitBreakerMiddleware with default configuration
+    pub fn new() -> Self {
+        Self::with_config(CircuitBreakerConfig::default())
+    }
+
+    /// Create a new CircuitBreakerMiddleware with custom configuration
+    pub fn with_config(config: CircuitBreakerConfig) -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(CircuitBreakerState {
+                state: CircuitState::Closed,
+                failure_count: 0,
+                last_failure_time: None,
+                success_count: 0,
+                blocked_count: 0,
+            })),
+            config,
+        }
+    }
+
+    /// Get the current circuit state
+    pub fn state(&self) -> CircuitState {
+        let state = self.state.lock().unwrap();
+        self.calculate_current_state(&state)
+    }
+
+    /// Get statistics about the circuit breaker
+    pub fn stats(&self) -> CircuitBreakerStats {
+        let state = self.state.lock().unwrap();
+        CircuitBreakerStats {
+            state: self.calculate_current_state(&state),
+            failure_count: state.failure_count,
+            success_count: state.success_count,
+            blocked_count: state.blocked_count,
+        }
+    }
+
+    /// Reset the circuit breaker to closed state
+    pub fn reset(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.state = CircuitState::Closed;
+        state.failure_count = 0;
+        state.last_failure_time = None;
+    }
+
+    /// Calculate the current state, handling timeout transitions
+    fn calculate_current_state(&self, state: &CircuitBreakerState) -> CircuitState {
+        match state.state {
+            CircuitState::Open => {
+                // Check if timeout has elapsed
+                if let Some(last_failure) = state.last_failure_time {
+                    if last_failure.elapsed().as_millis() as u64 >= self.config.timeout_ms {
+                        return CircuitState::HalfOpen;
+                    }
+                }
+                CircuitState::Open
+            }
+            other => other,
+        }
+    }
+
+    /// Check if a response should be considered a failure
+    fn is_failure_status(&self, status_code: u16) -> bool {
+        self.config.failure_status_codes.contains(&status_code)
+    }
+}
+
+impl Default for CircuitBreakerMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Statistics about the circuit breaker
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerStats {
+    /// Current state of the circuit
+    pub state: CircuitState,
+    /// Current consecutive failure count
+    pub failure_count: u32,
+    /// Total successful requests
+    pub success_count: u64,
+    /// Total blocked requests
+    pub blocked_count: u64,
+}
+
+#[async_trait]
+impl Middleware for CircuitBreakerMiddleware {
+    async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
+        let mut state = self.state.lock().unwrap();
+        let current_state = self.calculate_current_state(&state);
+
+        match current_state {
+            CircuitState::Open => {
+                state.blocked_count += 1;
+                drop(state); // Release lock before returning error
+                Err(CallerError::RequestError(format!(
+                    "Circuit breaker is OPEN for {} {}",
+                    ctx.method, ctx.url
+                )))
+            }
+            CircuitState::Closed | CircuitState::HalfOpen => {
+                // Update the state if we transitioned to HalfOpen
+                if current_state != state.state {
+                    state.state = current_state;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
+        let mut state = self.state.lock().unwrap();
+
+        if self.is_failure_status(ctx.status_code) {
+            // Failure response
+            state.failure_count += 1;
+            state.last_failure_time = Some(std::time::Instant::now());
+
+            match state.state {
+                CircuitState::Closed => {
+                    if state.failure_count >= self.config.failure_threshold {
+                        state.state = CircuitState::Open;
+                    }
+                }
+                CircuitState::HalfOpen => {
+                    // Failure in half-open state -> back to open
+                    state.state = CircuitState::Open;
+                }
+                CircuitState::Open => {
+                    // Already open, nothing to do
+                }
+            }
+        } else if ctx.is_success() {
+            // Success response
+            state.success_count += 1;
+
+            match state.state {
+                CircuitState::HalfOpen => {
+                    // Check if we've had enough successes to close the circuit
+                    if state.failure_count > 0 {
+                        state.failure_count -= 1;
+                    }
+                    if state.failure_count == 0 {
+                        state.state = CircuitState::Closed;
+                    }
+                }
+                CircuitState::Closed => {
+                    // Reset failure count on success
+                    state.failure_count = 0;
+                }
+                CircuitState::Open => {
+                    // Shouldn't happen, but reset if it does
+                    state.state = CircuitState::Closed;
+                    state.failure_count = 0;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn on_error(&self, _error: &CallerError, _ctx: &RequestContext) {
+        let mut state = self.state.lock().unwrap();
+        state.failure_count += 1;
+        state.last_failure_time = Some(std::time::Instant::now());
+
+        if state.state == CircuitState::HalfOpen {
+            state.state = CircuitState::Open;
+        } else if state.failure_count >= self.config.failure_threshold {
+            state.state = CircuitState::Open;
+        }
+    }
+
+    fn name(&self) -> &str {
+        "CircuitBreakerMiddleware"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +785,163 @@ mod tests {
 
         let ua = ctx.headers.get("user-agent").unwrap();
         assert_eq!(ua, "MyApp/1.0");
+    }
+
+    // =========================================================================
+    // Circuit Breaker Tests
+    // =========================================================================
+
+    #[test]
+    fn test_circuit_breaker_config_builder() {
+        let config = CircuitBreakerConfig::new()
+            .with_failure_threshold(10)
+            .with_timeout_ms(60000)
+            .with_success_threshold(3)
+            .with_failure_status_codes(vec![500, 503]);
+
+        assert_eq!(config.failure_threshold, 10);
+        assert_eq!(config.timeout_ms, 60000);
+        assert_eq!(config.success_threshold, 3);
+        assert_eq!(config.failure_status_codes, vec![500, 503]);
+    }
+
+    #[test]
+    fn test_circuit_breaker_default_config() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.failure_threshold, 5);
+        assert_eq!(config.timeout_ms, 30000);
+        assert_eq!(config.success_threshold, 2);
+        assert!(config.failure_status_codes.contains(&500));
+        assert!(config.failure_status_codes.contains(&503));
+    }
+
+    #[test]
+    fn test_circuit_breaker_initial_state() {
+        let middleware = CircuitBreakerMiddleware::new();
+        assert_eq!(middleware.state(), CircuitState::Closed);
+
+        let stats = middleware.stats();
+        assert_eq!(stats.state, CircuitState::Closed);
+        assert_eq!(stats.failure_count, 0);
+        assert_eq!(stats.success_count, 0);
+        assert_eq!(stats.blocked_count, 0);
+    }
+
+    #[test]
+    fn test_circuit_breaker_reset() {
+        let middleware = CircuitBreakerMiddleware::new();
+        
+        // Simulate some failures
+        {
+            let mut state = middleware.state.lock().unwrap();
+            state.failure_count = 3;
+            state.state = CircuitState::Open;
+        }
+        
+        assert_eq!(middleware.state(), CircuitState::Open);
+        
+        middleware.reset();
+        
+        assert_eq!(middleware.state(), CircuitState::Closed);
+        let stats = middleware.stats();
+        assert_eq!(stats.failure_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_allows_requests_when_closed() {
+        let middleware = CircuitBreakerMiddleware::new();
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+
+        let result = middleware.before_request(&mut ctx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_opens_after_failures() {
+        let config = CircuitBreakerConfig::new()
+            .with_failure_threshold(2)
+            .with_failure_status_codes(vec![500]);
+        
+        let middleware = CircuitBreakerMiddleware::with_config(config);
+        
+        // Simulate first failure
+        {
+            let req_ctx = RequestContext::new("GET", "https://example.com");
+            let mut resp_ctx = ResponseContext::new(500, "error".to_string(), req_ctx, 10);
+            middleware.after_response(&mut resp_ctx).await.unwrap();
+        }
+        
+        assert_eq!(middleware.state(), CircuitState::Closed);
+        
+        // Simulate second failure - should open circuit
+        {
+            let req_ctx = RequestContext::new("GET", "https://example.com");
+            let mut resp_ctx = ResponseContext::new(500, "error".to_string(), req_ctx, 10);
+            middleware.after_response(&mut resp_ctx).await.unwrap();
+        }
+        
+        assert_eq!(middleware.state(), CircuitState::Open);
+        
+        // Next request should be blocked
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        let result = middleware.before_request(&mut ctx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Circuit breaker is OPEN"));
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_success_resets_failure_count() {
+        let config = CircuitBreakerConfig::new()
+            .with_failure_threshold(3);
+        
+        let middleware = CircuitBreakerMiddleware::with_config(config);
+        
+        // Simulate a failure
+        {
+            let req_ctx = RequestContext::new("GET", "https://example.com");
+            let mut resp_ctx = ResponseContext::new(500, "error".to_string(), req_ctx, 10);
+            middleware.after_response(&mut resp_ctx).await.unwrap();
+        }
+        
+        let stats = middleware.stats();
+        assert_eq!(stats.failure_count, 1);
+        
+        // Simulate a success
+        {
+            let req_ctx = RequestContext::new("GET", "https://example.com");
+            let mut resp_ctx = ResponseContext::new(200, "ok".to_string(), req_ctx, 10);
+            middleware.after_response(&mut resp_ctx).await.unwrap();
+        }
+        
+        let stats = middleware.stats();
+        assert_eq!(stats.failure_count, 0);
+        assert_eq!(stats.state, CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_circuit_state_debug_and_clone() {
+        let state = CircuitState::Closed;
+        let cloned = state.clone();
+        assert_eq!(state, cloned);
+        
+        // Test Debug trait
+        let debug_str = format!("{:?}", state);
+        assert!(debug_str.contains("Closed"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_stats_clone() {
+        let stats = CircuitBreakerStats {
+            state: CircuitState::Closed,
+            failure_count: 1,
+            success_count: 10,
+            blocked_count: 2,
+        };
+        
+        let cloned = stats.clone();
+        assert_eq!(stats.state, cloned.state);
+        assert_eq!(stats.failure_count, cloned.failure_count);
+        assert_eq!(stats.success_count, cloned.success_count);
+        assert_eq!(stats.blocked_count, cloned.blocked_count);
     }
 }
