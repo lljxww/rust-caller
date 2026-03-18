@@ -23,8 +23,9 @@ pub use builtin_auth::{
 pub use caller_config::CallerConfig;
 pub use download_result::DownloadResult;
 pub use middleware::{
-    HeaderMiddleware, LoggingMiddleware, Middleware, MiddlewareChain, RequestContext,
-    ResponseContext, RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
+    CircuitBreakerMiddleware, CircuitState, HeaderMiddleware, LoggingMiddleware, Middleware,
+    MiddlewareChain, RateLimitMiddleware, RateLimitStrategy, RequestContext, ResponseContext,
+    RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
 };
 pub use retry_config::RetryConfig;
 pub use service_item::ServiceItem;
