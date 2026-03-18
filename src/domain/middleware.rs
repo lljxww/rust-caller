@@ -568,10 +568,10 @@ impl CircuitBreakerMiddleware {
         match state.state {
             CircuitState::Open => {
                 // Check if timeout has elapsed
-                if let Some(last_failure) = state.last_failure_time {
-                    if last_failure.elapsed().as_millis() as u64 >= self.config.timeout_ms {
-                        return CircuitState::HalfOpen;
-                    }
+                if let Some(last_failure) = state.last_failure_time
+                    && last_failure.elapsed().as_millis() as u64 >= self.config.timeout_ms
+                {
+                    return CircuitState::HalfOpen;
                 }
                 CircuitState::Open
             }
@@ -685,9 +685,8 @@ impl Middleware for CircuitBreakerMiddleware {
         state.failure_count += 1;
         state.last_failure_time = Some(std::time::Instant::now());
 
-        if state.state == CircuitState::HalfOpen {
-            state.state = CircuitState::Open;
-        } else if state.failure_count >= self.config.failure_threshold {
+        if state.state == CircuitState::HalfOpen || state.failure_count >= self.config.failure_threshold
+        {
             state.state = CircuitState::Open;
         }
     }
@@ -921,8 +920,8 @@ mod tests {
     #[test]
     fn test_circuit_state_debug_and_clone() {
         let state = CircuitState::Closed;
-        let cloned = state.clone();
-        assert_eq!(state, cloned);
+        let copied = state;
+        assert_eq!(state, copied);
         
         // Test Debug trait
         let debug_str = format!("{:?}", state);

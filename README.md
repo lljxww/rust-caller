@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |-------|-------------|
 | [Configuration](docs/configuration.md) | Config file format, multi-format support, hot reload |
 | [Authentication](docs/authentication.md) | Auth types, dynamic tokens, runtime updates |
+| [Middleware](docs/middleware.md) | Request/response interception, circuit breaker, logging |
 | [API Server](docs/server.md) | Swagger UI, OpenAPI generation, proxy testing |
 
 ## Authentication
