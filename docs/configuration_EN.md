@@ -1,10 +1,12 @@
-# 配置文件
+[English](configuration_EN.md) | [简体中文](configuration_CN.md)
 
-Caller 支持多种配置文件格式：JSON、YAML 和 TOML。
+# Configuration Files
 
-## 配置结构
+Caller supports multiple configuration file formats: JSON, YAML, and TOML.
 
-### 完整示例（JSON）
+## Configuration Structure
+
+### Complete Example (JSON)
 
 ```json
 {
@@ -43,48 +45,48 @@ Caller 支持多种配置文件格式：JSON、YAML 和 TOML。
 }
 ```
 
-## 字段说明
+## Field Descriptions
 
 ### ServiceItem
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `ApiName` | string | ✅ | 服务名称，用于调用时引用 |
-| `BaseUrl` | string | ✅ | API 基础 URL |
-| `AuthorizationType` | string | ❌ | 默认认证类型 |
-| `Timeout` | number | ❌ | 默认超时（毫秒） |
-| `ApiItems` | array | ✅ | API 端点列表 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ApiName` | string | ✅ | Service name, used for reference when calling |
+| `BaseUrl` | string | ✅ | API base URL |
+| `AuthorizationType` | string | ❌ | Default authentication type |
+| `Timeout` | number | ❌ | Default timeout (milliseconds) |
+| `ApiItems` | array | ✅ | List of API endpoints |
 
 ### ApiItem
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `Method` | string | ✅ | 方法名，调用时使用 `ServiceName.MethodName` |
-| `Url` | string | ✅ | 相对 URL，支持路径参数 `{id}` |
-| `HttpMethod` | string | ✅ | HTTP 方法：GET, POST, PUT, DELETE, PATCH |
-| `ParamType` | string | ✅ | 参数类型（见下表） |
-| `Description` | string | ❌ | 方法描述 |
-| `AuthorizationType` | string | ❌ | 覆盖服务级认证 |
-| `Timeout` | number | ❌ | 覆盖服务级超时 |
-| `ContentType` | string | ❌ | 自定义 Content-Type |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `Method` | string | ✅ | Method name, use `ServiceName.MethodName` when calling |
+| `Url` | string | ✅ | Relative URL, supports path parameters `{id}` |
+| `HttpMethod` | string | ✅ | HTTP method: GET, POST, PUT, DELETE, PATCH |
+| `ParamType` | string | ✅ | Parameter type (see table below) |
+| `Description` | string | ❌ | Method description |
+| `AuthorizationType` | string | ❌ | Override service-level authentication |
+| `Timeout` | number | ❌ | Override service-level timeout |
+| `ContentType` | string | ❌ | Custom Content-Type |
 
-### ParamType 参数类型
+### ParamType Parameter Types
 
-| 类型 | 说明 | 示例 |
-|------|------|------|
-| `none` | 无参数 | `/posts` |
-| `query` | URL 查询参数 | `/posts?userId=1` |
-| `path` | URL 路径参数 | `/posts/1` |
-| `json` | JSON 请求体 | `{"title":"Test"}` |
-| `form` | 表单数据 | `title=Test&body=Content` |
-| `path,json` | 路径 + JSON | `/posts/1` + `{"title":"Updated"}` |
-| `path,query` | 路径 + 查询 | `/posts/1?fields=id,title` |
+| Type | Description | Example |
+|------|-------------|---------|
+| `none` | No parameters | `/posts` |
+| `query` | URL query parameters | `/posts?userId=1` |
+| `path` | URL path parameters | `/posts/1` |
+| `json` | JSON request body | `{"title":"Test"}` |
+| `form` | Form data | `title=Test&body=Content` |
+| `path,json` | Path + JSON | `/posts/1` + `{"title":"Updated"}` |
+| `path,query` | Path + Query | `/posts/1?fields=id,title` |
 
-## 多格式支持
+## Multi-format Support
 
-### JSON（默认）
+### JSON (Default)
 
-文件：`caller.json`
+File: `caller.json`
 
 ```json
 {
@@ -94,7 +96,7 @@ Caller 支持多种配置文件格式：JSON、YAML 和 TOML。
 
 ### YAML
 
-文件：`caller.yaml` 或 `caller.yml`
+File: `caller.yaml` or `caller.yml`
 
 ```yaml
 ServiceItems:
@@ -109,7 +111,7 @@ ServiceItems:
 
 ### TOML
 
-文件：`caller.toml`
+File: `caller.toml`
 
 ```toml
 [[ServiceItems]]
@@ -123,7 +125,7 @@ HttpMethod = "GET"
 ParamType = "query"
 ```
 
-## 格式转换
+## Format Conversion
 
 ```rust
 use caller::config::config_loader::ConfigLoader;
@@ -134,7 +136,7 @@ ConfigLoader::convert_config("caller.json", "caller.yaml")?;
 // YAML → TOML
 ConfigLoader::convert_config("caller.yaml", "caller.toml")?;
 
-// 显式指定格式
+// Explicitly specify format
 use caller::config::config_loader::ConfigFormat;
 ConfigLoader::convert_config_with_format(
     "config.txt",
@@ -143,33 +145,33 @@ ConfigLoader::convert_config_with_format(
 )?;
 ```
 
-## 配置加载
+## Configuration Loading
 
-### 自动加载
+### Automatic Loading
 
 ```rust
 use caller::init_config;
 
-// 从 ./caller.json 加载（或 .yaml/.toml）
+// Load from ./caller.json (or .yaml/.toml)
 init_config()?;
 ```
 
-### 手动加载
+### Manual Loading
 
 ```rust
 use caller::config::config_loader::ConfigLoader;
 
-// 从指定路径加载
+// Load from specific path
 ConfigLoader::load_config_from_path("config/api.json")?;
 
-// 显式指定格式
+// Explicitly specify format
 ConfigLoader::load_config_from_path_with_format(
     "config/api.txt",
     ConfigFormat::Json,
 )?;
 ```
 
-### 程序化配置
+### Programmatic Configuration
 
 ```rust
 use caller::config::config_loader::ConfigLoader;
@@ -201,22 +203,22 @@ let config = CallerConfig {
 ConfigLoader::init_with_config(config);
 ```
 
-## 配置热更新
+## Hot Reload
 
 ```rust
 use caller::config::config_loader::ConfigLoader;
 use std::time::Duration;
 
-// 启动文件监视
+// Start file watching
 ConfigLoader::start_watching(Duration::from_millis(500))?;
 
-// 配置文件修改后自动重新加载
-// 无需重启应用
+// Automatically reloads when config file changes
+// No need to restart application
 ```
 
-## 环境变量
+## Environment Variables
 
-在 URL 中使用环境变量：
+Use environment variables in URLs:
 
 ```json
 {
@@ -230,9 +232,9 @@ ConfigLoader::start_watching(Duration::from_millis(500))?;
 }
 ```
 
-## 最佳实践
+## Best Practices
 
-### 1. 按环境分离
+### 1. Separate by Environment
 
 ```
 config/
@@ -247,31 +249,31 @@ let config_path = format!("config/caller.{}.json", env);
 ConfigLoader::load_config_from_path(&config_path)?;
 ```
 
-### 2. 敏感信息使用认证系统
+### 2. Use Authentication System for Sensitive Information
 
-不要在配置文件中硬编码 token：
+Don't hardcode tokens in configuration files:
 
 ```json
-// ❌ 不推荐
+// ❌ Not recommended
 {
   "Authorizations": [
     { "Token": "hardcoded-secret-token" }
   ]
 }
 
-// ✅ 推荐：配置只引用名称
+// ✅ Recommended: config only references name
 {
   "ServiceItems": [{
     "AuthorizationType": "github_auth"
   }]
 }
 
-// 代码中注册
+// Register in code
 BearerAuth::from_env("GITHUB_TOKEN")?;
 register_auth("github_auth", auth)?;
 ```
 
-### 3. 版本控制
+### 3. Version Control
 
 ```json
 {
@@ -281,4 +283,3 @@ register_auth("github_auth", auth)?;
   },
   "ServiceItems": [...]
 }
-```

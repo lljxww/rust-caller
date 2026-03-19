@@ -1,3 +1,5 @@
+[English](server_EN.md) | 简体中文
+
 # API 文档服务器
 
 Caller 提供内置的 API 文档服务器，支持 Swagger UI 和请求代理测试。

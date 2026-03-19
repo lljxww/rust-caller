@@ -1,20 +1,22 @@
-# Middleware System
+[English](middleware_EN.md) | 简体中文
 
-The caller library provides a powerful middleware system that allows you to intercept and modify requests and responses.
+# 中间件系统
 
-## Overview
+Caller 库提供了强大的中间件系统，允许你拦截和修改请求与响应。
 
-Middleware can:
-- Modify requests before they are sent
-- Process responses after they are received
-- Handle errors during request execution
-- Implement cross-cutting concerns like logging, retry, and circuit breaking
+## 概述
 
-## Built-in Middleware
+中间件可以：
+- 在发送请求之前修改请求
+- 在接收响应之后处理响应
+- 处理请求执行过程中的错误
+- 实现日志、重试、熔断等横切关注点
+
+## 内置中间件
 
 ### HeaderMiddleware
 
-Add custom headers to all requests:
+为所有请求添加自定义请求头：
 
 ```rust
 use caller::domain::middleware::{HeaderMiddleware, MiddlewareChain, RequestContext};
@@ -26,7 +28,7 @@ let middleware = HeaderMiddleware::new()
 
 ### LoggingMiddleware
 
-Log requests and responses:
+记录请求和响应：
 
 ```rust
 use caller::domain::middleware::LoggingMiddleware;
@@ -36,7 +38,7 @@ let middleware = LoggingMiddleware::new()
     .with_log_response(true);
 ```
 
-Output:
+输出：
 ```
 [Request] GET https://api.example.com/users
 [Response] GET https://api.example.com/users - 200 (45ms)
@@ -44,7 +46,7 @@ Output:
 
 ### UserAgentMiddleware
 
-Add a custom User-Agent header:
+添加自定义 User-Agent 请求头：
 
 ```rust
 use caller::domain::middleware::UserAgentMiddleware;
@@ -54,7 +56,7 @@ let middleware = UserAgentMiddleware::new("MyApp/1.0");
 
 ### TimingMiddleware
 
-Add timing/tracing information to requests:
+为请求添加计时/追踪信息：
 
 ```rust
 use caller::domain::middleware::TimingMiddleware;
@@ -65,7 +67,7 @@ let middleware = TimingMiddleware::new()
 
 ### RetryMiddleware
 
-Retry failed requests:
+重试失败的请求：
 
 ```rust
 use caller::domain::middleware::RetryMiddleware;
@@ -77,46 +79,46 @@ let middleware = RetryMiddleware::new()
 
 ### CircuitBreakerMiddleware
 
-Prevent cascading failures by stopping requests to a failing service:
+通过停止向失败的服务发送请求来防止级联故障：
 
 ```rust
 use caller::domain::middleware::{CircuitBreakerMiddleware, CircuitBreakerConfig};
 
 let config = CircuitBreakerConfig::new()
-    .with_failure_threshold(5)      // Open after 5 failures
-    .with_timeout_ms(30000)          // Wait 30s before trying again
-    .with_success_threshold(2)       // Close after 2 successes
+    .with_failure_threshold(5)      // 5次失败后打开
+    .with_timeout_ms(30000)          // 30秒后重试
+    .with_success_threshold(2)       // 2次成功后关闭
     .with_failure_status_codes(vec![500, 502, 503, 504]);
 
 let middleware = CircuitBreakerMiddleware::with_config(config);
 ```
 
-#### Circuit Breaker States
+#### 熔断器状态
 
-| State | Description |
-|-------|-------------|
-| **Closed** | Normal operation, requests flow through |
-| **Open** | Requests are blocked, waiting for timeout |
-| **HalfOpen** | Testing if service has recovered |
+| 状态 | 描述 |
+|------|------|
+| **Closed** | 正常操作，请求通过 |
+| **Open** | 请求被阻止，等待超时 |
+| **HalfOpen** | 测试服务是否已恢复 |
 
-#### Monitoring
+#### 监控
 
 ```rust
-// Get current state
+// 获取当前状态
 let state = middleware.state();
 
-// Get statistics
+// 获取统计信息
 let stats = middleware.stats();
-println!("Failures: {}", stats.failure_count);
-println!("Blocked: {}", stats.blocked_count);
+println!("失败次数: {}", stats.failure_count);
+println!("阻止次数: {}", stats.blocked_count);
 
-// Reset the circuit
+// 重置熔断器
 middleware.reset();
 ```
 
-## Creating Custom Middleware
+## 创建自定义中间件
 
-Implement the `Middleware` trait:
+实现 `Middleware` trait：
 
 ```rust
 use caller::domain::middleware::{Middleware, RequestContext, ResponseContext};
@@ -128,7 +130,7 @@ pub struct MyMiddleware;
 #[async_trait]
 impl Middleware for MyMiddleware {
     async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
-        // Modify request before sending
+        // 在发送之前修改请求
         ctx.headers.insert(
             "x-custom-header".parse().unwrap(),
             "value".parse().unwrap()
@@ -137,14 +139,14 @@ impl Middleware for MyMiddleware {
     }
 
     async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
-        // Process response after receiving
-        println!("Response time: {}ms", ctx.duration_ms);
+        // 在接收之后处理响应
+        println!("响应时间: {}ms", ctx.duration_ms);
         Ok(())
     }
 
     async fn on_error(&self, error: &CallerError, ctx: &RequestContext) {
-        // Handle errors
-        eprintln!("Request failed: {}", error);
+        // 处理错误
+        eprintln!("请求失败: {}", error);
     }
 
     fn name(&self) -> &str {
@@ -153,9 +155,9 @@ impl Middleware for MyMiddleware {
 }
 ```
 
-## Middleware Chain
+## 中间件链
 
-Combine multiple middleware:
+组合多个中间件：
 
 ```rust
 use caller::domain::middleware::{
@@ -170,16 +172,16 @@ let chain = MiddlewareChain::new()
     .with(UserAgentMiddleware::new("MyApp/1.0"))
     .with(LoggingMiddleware::new());
 
-// Execute before request
+// 在请求之前执行
 chain.before_request(&mut ctx).await?;
 
-// Execute after response
+// 在响应之后执行
 chain.after_response(&mut response_ctx).await?;
 ```
 
-## Request Context
+## 请求上下文
 
-The `RequestContext` contains all information about an outgoing request:
+`RequestContext` 包含关于传出请求的所有信息：
 
 ```rust
 let ctx = RequestContext::new("GET", "https://api.example.com/users")
@@ -189,39 +191,39 @@ let ctx = RequestContext::new("GET", "https://api.example.com/users")
     .with_metadata("trace_id", "abc123");
 ```
 
-## Response Context
+## 响应上下文
 
-The `ResponseContext` contains all information about a received response:
+`ResponseContext` 包含关于已接收响应的所有信息：
 
 ```rust
-// Status checks
+// 状态检查
 if response.is_success() {
-    // 2xx status code
+    // 2xx 状态码
 }
 if response.is_client_error() {
-    // 4xx status code
+    // 4xx 状态码
 }
 if response.is_server_error() {
-    // 5xx status code
+    // 5xx 状态码
 }
 
-// Access data
-println!("Status: {}", response.status_code);
-println!("Body: {}", response.body);
-println!("Duration: {}ms", response.duration_ms);
+// 访问数据
+println!("状态: {}", response.status_code);
+println!("响应体: {}", response.body);
+println!("持续时间: {}ms", response.duration_ms);
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Order matters**: Middleware is executed in the order added to the chain
-2. **Keep it simple**: Each middleware should do one thing well
-3. **Handle errors**: Return errors to abort the request chain
-4. **Use metadata**: Store request-scoped data in `ctx.metadata`
-5. **Be async-safe**: Middleware must be `Send + Sync`
+1. **顺序很重要**：中间件按照添加到链中的顺序执行
+2. **保持简单**：每个中间件应该做好一件事
+3. **处理错误**：返回错误以中止请求链
+4. **使用元数据**：在 `ctx.metadata` 中存储请求范围的数据
+5. **异步安全**：中间件必须是 `Send + Sync`
 
-## Common Patterns
+## 常见模式
 
-### Request ID Tracking
+### 请求 ID 追踪
 
 ```rust
 pub struct RequestIdMiddleware;
@@ -241,7 +243,7 @@ impl Middleware for RequestIdMiddleware {
 }
 ```
 
-### Rate Limiting
+### 限流
 
 ```rust
 use std::sync::Arc;
@@ -270,4 +272,3 @@ impl Middleware for RateLimitMiddleware {
         "RateLimitMiddleware"
     }
 }
-```

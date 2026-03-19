@@ -4,12 +4,14 @@ pub mod core;
 pub mod domain;
 pub mod infra;
 pub mod openapi;
+pub mod params;
 pub mod server;
 pub mod shared;
 
 // Re-export public APIs for convenience
 pub use config::*;
 pub use domain::*;
+pub use params::*;
 
 // Main public API
 use std::collections::HashMap;
@@ -35,6 +37,27 @@ pub use server::ServerConfig;
 pub use server::start_server;
 
 /// Main public API function
+/// 
+/// 传统方式：接受 HashMap<String, String> 参数
+/// 
+/// # Arguments
+/// * `method` - API method in format "service.api"
+/// * `params` - Optional parameters (HashMap)
+///
+/// # Examples
+/// ```no_run
+/// # use caller::call;
+/// # use std::collections::HashMap;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), caller::CallerError> {
+/// let mut params = HashMap::new();
+/// params.insert("id".to_string(), "1".to_string());
+/// call("api.get", Some(params)).await?;
+/// # Ok(())
+/// # }
+/// ```
+/// 
+/// 对于类型安全的参数，请使用 [`call_params`] 函数。
 pub async fn call(
     method: &str,
     params: Option<HashMap<String, String>>,
@@ -42,29 +65,63 @@ pub async fn call(
     core::context::CallerContext::call(method, params).await
 }
 
-/// Main public API function with retry support
+/// Main public API function with type-safe parameters
 /// 
 /// # Arguments
 /// * `method` - API method in format "service.api"
-/// * `params` - Optional parameters for the request
-/// * `retry_config` - Retry configuration
+/// * `params` - Optional type-safe parameters using [`params!`] macro
 /// 
 /// # Examples
 /// ```no_run
-/// use caller::{call_with_retry, RetryConfig};
-/// use std::collections::HashMap;
-/// use std::time::Duration;
-/// 
+/// # use caller::{call_params, params};
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), caller::CallerError> {
-/// let retry_config = RetryConfig::new()
-///     .with_max_retries(3)
-///     .with_base_delay(Duration::from_millis(500));
+/// // Using the params! macro
+/// let result = call_params("api.get", Some(params! {
+///     "id" => 1
+/// })).await?;
 /// 
-/// let result = call_with_retry("jsonplaceholder.posts.list", None, retry_config).await?;
+/// // Using builder pattern
+/// let params = params!()
+///     .add("id", 1)
+///     .add("name", "Alice")
+///     .add("active", true);
+/// let result = call_params("api.create", Some(params)).await?;
 /// # Ok(())
 /// # }
 /// ```
+pub async fn call_params(
+    method: &str,
+    params: Option<CallParams>,
+) -> Result<domain::api_result::ApiResult, CallerError> {
+    let hashmap = params.map(|p| p.to_hashmap());
+    core::context::CallerContext::call(method, hashmap).await
+}
+
+/// Main public API function with retry support
+/// 
+/// 传统方式：接受 HashMap<String, String> 参数
+/// 
+/// # Arguments
+/// * `method` - API method in format "service.api"
+/// * `params` - Optional parameters (HashMap)
+/// * `retry_config` - Retry configuration
+///
+/// # Examples
+/// ```no_run
+/// # use caller::{call_with_retry, RetryConfig};
+/// # use std::collections::HashMap;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), caller::CallerError> {
+/// let mut params = HashMap::new();
+/// params.insert("id".to_string(), "1".to_string());
+/// let retry_config = RetryConfig::new();
+/// call_with_retry("api.get", Some(params), retry_config).await?;
+/// # Ok(())
+/// # }
+/// ```
+/// 
+/// 对于类型安全的参数，请使用 [`call_params_with_retry`] 函数。
 pub async fn call_with_retry(
     method: &str,
     params: Option<HashMap<String, String>>,
@@ -73,11 +130,47 @@ pub async fn call_with_retry(
     core::context::CallerContext::call_with_retry(method, params, retry_config).await
 }
 
-/// Download file from API endpoint
+/// Main public API function with type-safe parameters and retry support
 /// 
 /// # Arguments
 /// * `method` - API method in format "service.api"
-/// * `params` - Optional parameters for the request
+/// * `params` - Optional type-safe parameters using [`params!`] macro
+/// * `retry_config` - Retry configuration
+/// 
+/// # Examples
+/// ```no_run
+/// # use caller::{call_params_with_retry, params, RetryConfig};
+/// # use std::time::Duration;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), caller::CallerError> {
+/// let retry_config = RetryConfig::new()
+///     .with_max_retries(3)
+///     .with_base_delay(Duration::from_millis(500));
+/// 
+/// let result = call_params_with_retry(
+///     "api.get",
+///     Some(params! { "id" => 1 }),
+///     retry_config
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn call_params_with_retry(
+    method: &str,
+    params: Option<CallParams>,
+    retry_config: domain::retry_config::RetryConfig,
+) -> Result<domain::api_result::ApiResult, CallerError> {
+    let hashmap = params.map(|p| p.to_hashmap());
+    core::context::CallerContext::call_with_retry(method, hashmap, retry_config).await
+}
+
+/// Download file from API endpoint
+/// 
+/// 传统方式：接受 HashMap<String, String> 参数
+/// 
+/// # Arguments
+/// * `method` - API method in format "service.api"
+/// * `params` - Optional parameters (HashMap)
 /// * `extension` - Optional file extension to override auto-detected extension
 /// 
 /// # Returns
@@ -85,27 +178,58 @@ pub async fn call_with_retry(
 /// 
 /// # Examples
 /// ```no_run
-/// use caller::download;
-/// 
+/// # use caller::download;
+/// # use std::collections::HashMap;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), caller::CallerError> {
-/// // Download with auto-detected file format
-/// let result = download("api.download", None, None).await?;
-/// 
-/// // Download with specified file extension
-/// let result = download("api.download", None, Some("pdf".to_string())).await?;
-/// 
-/// // Save the downloaded file
-/// result.save("./downloads", "myfile")?;
+/// let mut params = HashMap::new();
+/// params.insert("file_id".to_string(), "123".to_string());
+/// let result = download("api.download", Some(params), None).await?;
 /// # Ok(())
 /// # }
 /// ```
+/// 
+/// 对于类型安全的参数，请使用 [`download_params`] 函数。
 pub async fn download(
     method: &str,
     params: Option<HashMap<String, String>>,
     extension: Option<String>,
 ) -> Result<domain::download_result::DownloadResult, CallerError> {
     core::context::CallerContext::download(method, params, extension).await
+}
+
+/// Download file from API endpoint with type-safe parameters
+/// 
+/// # Arguments
+/// * `method` - API method in format "service.api"
+/// * `params` - Optional type-safe parameters using [`params!`] macro
+/// * `extension` - Optional file extension to override auto-detected extension
+/// 
+/// # Returns
+/// Returns a DownloadResult containing the downloaded content and metadata
+/// 
+/// # Examples
+/// ```no_run
+/// # use caller::{download_params, params};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), caller::CallerError> {
+/// let result = download_params(
+///     "api.download",
+///     Some(params! { "file_id" => 123 }),
+///     Some("pdf".to_string())
+/// ).await?;
+/// 
+/// result.save("./downloads", "myfile")?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn download_params(
+    method: &str,
+    params: Option<CallParams>,
+    extension: Option<String>,
+) -> Result<domain::download_result::DownloadResult, CallerError> {
+    let hashmap = params.map(|p| p.to_hashmap());
+    core::context::CallerContext::download(method, hashmap, extension).await
 }
 
 /// Initialize the configuration by loading from file

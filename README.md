@@ -59,10 +59,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Topic | Description |
 |-------|-------------|
-| [Configuration](docs/configuration.md) | Config file format, multi-format support, hot reload |
-| [Authentication](docs/authentication.md) | Auth types, dynamic tokens, runtime updates |
-| [Middleware](docs/middleware.md) | Request/response interception, circuit breaker, logging |
-| [API Server](docs/server.md) | Swagger UI, OpenAPI generation, proxy testing |
+| [Configuration](docs/configuration_EN.md) | Config file format, multi-format support, hot reload |
+| [Authentication](docs/authentication_EN.md) | Auth types, dynamic tokens, runtime updates |
+| [Middleware](docs/middleware_EN.md) | Request/response interception, circuit breaker, logging |
+| [API Server](docs/server_EN.md) | Swagger UI, OpenAPI generation, proxy testing |
 
 ## Authentication
 
@@ -84,7 +84,7 @@ register_auth("dynamic", DynamicBearerAuth::from_shared(token.clone()))?;
 *token.write().unwrap() = "refreshed-token".to_string();
 ```
 
-→ [Full Authentication Guide](docs/authentication.md)
+→ [Full Authentication Guide](docs/authentication_EN.md)
 
 ## API Documentation Server
 
@@ -100,7 +100,7 @@ cargo run --features server --example server
 # Open http://localhost:8080 for Swagger UI
 ```
 
-→ [Server Documentation](docs/server.md)
+→ [Server Documentation](docs/server_EN.md)
 
 ## Configuration Example
 
@@ -130,7 +130,7 @@ cargo run --features server --example server
 }
 ```
 
-→ [Configuration Guide](docs/configuration.md)
+→ [Configuration Guide](docs/configuration_EN.md)
 
 ## API Reference
 

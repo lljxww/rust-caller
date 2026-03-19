@@ -62,9 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | 主题 | 描述 |
 |------|------|
-| [配置文件](docs/configuration.md) | 配置格式、多格式支持、热重载 |
-| [认证系统](docs/authentication.md) | 认证类型、动态 Token、运行时更新 |
-| [API 服务器](docs/server.md) | Swagger UI、OpenAPI 生成、代理测试 |
+| [配置文件](docs/configuration_CN.md) | 配置格式、多格式支持、热重载 |
+| [认证系统](docs/authentication_CN.md) | 认证类型、动态 Token、运行时更新 |
+| [中间件系统](docs/middleware_CN.md) | 请求/响应拦截、熔断、日志 |
+| [API 服务器](docs/server_CN.md) | Swagger UI、OpenAPI 生成、代理测试 |
 
 ## 认证
 
@@ -86,7 +87,7 @@ register_auth("dynamic", DynamicBearerAuth::from_shared(token.clone()))?;
 *token.write().unwrap() = "refreshed-token".to_string();
 ```
 
-→ [完整认证指南](docs/authentication.md)
+→ [完整认证指南](docs/authentication_CN.md)
 
 ## API 文档服务器
 
@@ -102,7 +103,7 @@ cargo run --features server --example server
 # 访问 http://localhost:8080 查看 Swagger UI
 ```
 
-→ [服务器文档](docs/server.md)
+→ [服务器文档](docs/server_CN.md)
 
 ## 配置示例
 
@@ -132,7 +133,7 @@ cargo run --features server --example server
 }
 ```
 
-→ [配置指南](docs/configuration.md)
+→ [配置指南](docs/configuration_CN.md)
 
 ## API 参考
 
