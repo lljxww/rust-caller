@@ -854,6 +854,221 @@ impl Middleware for RateLimitMiddleware {
     }
 }
 
+// ============================================================================
+// Request ID Middleware
+// ============================================================================
+
+/// Strategy for generating request IDs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestIdStrategy {
+    /// UUID v4 (random)
+    Uuid,
+    /// Timestamp-based ID (nanoseconds since epoch)
+    Timestamp,
+    /// Short random ID (8 characters, base62)
+    ShortRandom,
+    /// Prefixed sequential counter (not thread-safe, for single-threaded use only)
+    PrefixedCounter,
+}
+
+/// Request ID middleware that adds a unique identifier to each request
+///
+/// This middleware automatically generates and attaches a unique request ID
+/// to every outgoing request. The ID can be added as a header and/or stored
+/// in the request context metadata for logging and tracing purposes.
+///
+/// # Example
+/// ```rust
+/// use caller::domain::middleware::{RequestIdMiddleware, RequestIdStrategy};
+///
+/// // Create with default settings (UUID, X-Request-Id header)
+/// let middleware = RequestIdMiddleware::new();
+///
+/// // Create with custom header and strategy
+/// let middleware = RequestIdMiddleware::new()
+///     .with_header_name("X-Trace-Id")
+///     .with_strategy(RequestIdStrategy::ShortRandom)
+///     .with_prefix("myapp");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestIdMiddleware {
+    /// Header name to use for the request ID
+    pub header_name: String,
+    /// Strategy for generating IDs
+    pub strategy: RequestIdStrategy,
+    /// Optional prefix for the ID (e.g., "myapp-")
+    pub prefix: Option<String>,
+    /// Whether to also store the ID in context metadata
+    pub store_in_metadata: bool,
+    /// Metadata key name (if storing in metadata)
+    pub metadata_key: String,
+}
+
+impl RequestIdMiddleware {
+    /// Create a new request ID middleware with default settings
+    pub fn new() -> Self {
+        Self {
+            header_name: "X-Request-Id".to_string(),
+            strategy: RequestIdStrategy::Uuid,
+            prefix: None,
+            store_in_metadata: true,
+            metadata_key: "request_id".to_string(),
+        }
+    }
+
+    /// Set the header name for the request ID
+    pub fn with_header_name(mut self, name: &str) -> Self {
+        self.header_name = name.to_string();
+        self
+    }
+
+    /// Set the ID generation strategy
+    pub fn with_strategy(mut self, strategy: RequestIdStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// Set a prefix for generated IDs
+    pub fn with_prefix(mut self, prefix: &str) -> Self {
+        self.prefix = Some(prefix.to_string());
+        self
+    }
+
+    /// Set whether to store the ID in request metadata
+    pub fn with_store_in_metadata(mut self, store: bool) -> Self {
+        self.store_in_metadata = store;
+        self
+    }
+
+    /// Set the metadata key name
+    pub fn with_metadata_key(mut self, key: &str) -> Self {
+        self.metadata_key = key.to_string();
+        self
+    }
+
+    /// Generate a unique request ID based on the configured strategy
+    pub fn generate_id(&self) -> String {
+        let id = match self.strategy {
+            RequestIdStrategy::Uuid => self.generate_uuid(),
+            RequestIdStrategy::Timestamp => self.generate_timestamp(),
+            RequestIdStrategy::ShortRandom => self.generate_short_random(),
+            RequestIdStrategy::PrefixedCounter => self.generate_counter(),
+        };
+
+        match &self.prefix {
+            Some(prefix) => format!("{}-{}", prefix, id),
+            None => id,
+        }
+    }
+
+    fn generate_uuid(&self) -> String {
+        // Simple UUID v4-like generation without external dependencies
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        
+        // Use timestamp and random data to create a UUID-like string
+        let secs = timestamp.as_secs();
+        let nanos = timestamp.subsec_nanos();
+        
+        // Format as UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx (exactly 36 chars)
+        // y is 8, 9, a, or b (variant bits)
+        let time_low = (secs & 0xFFFFFFFF) as u32;
+        let time_mid = ((secs >> 32) & 0xFFFF) as u16;
+        let time_hi = ((nanos >> 16) & 0x0FFF) as u16;
+        let variant = (nanos & 0x3FFF) as u16 | 0x8000;
+        let node = (nanos as u64) | ((secs >> 48) & 0xFFFF) << 32;
+        
+        format!(
+            "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+            time_low,
+            time_mid,
+            time_hi,
+            variant,
+            node & 0xFFFFFFFFFFFF // Ensure exactly 12 hex digits
+        )
+    }
+
+    fn generate_timestamp(&self) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        
+        // Nanosecond precision timestamp
+        format!("{}{}", timestamp.as_secs(), timestamp.subsec_nanos())
+    }
+
+    fn generate_short_random(&self) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        
+        // Generate 8-character base62-like string
+        let mut value = timestamp.as_nanos() as u64;
+        let mut value2 = timestamp.subsec_nanos() as u64;
+        value = value.wrapping_add(value2.rotate_left(17));
+        
+        const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        let mut result = [0u8; 8];
+        
+        for item in result.iter_mut() {
+            *item = BASE62[(value % 62) as usize];
+            value /= 62;
+            if value == 0 {
+                value = value2;
+                value2 = value2.wrapping_mul(6364136223846793005);
+            }
+        }
+        
+        String::from_utf8_lossy(&result).to_string()
+    }
+
+    fn generate_counter(&self) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("{:06x}", count)
+    }
+}
+
+impl Default for RequestIdMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Middleware for RequestIdMiddleware {
+    async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
+        let request_id = self.generate_id();
+        
+        // Add to headers
+        if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(self.header_name.as_bytes())
+            && let Ok(header_value) = reqwest::header::HeaderValue::from_str(&request_id)
+        {
+            ctx.headers.insert(header_name, header_value);
+        }
+        
+        // Store in metadata if configured
+        if self.store_in_metadata {
+            ctx.metadata.insert(self.metadata_key.clone(), request_id);
+        }
+        
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "RequestIdMiddleware"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,5 +1309,169 @@ mod tests {
 
         // After burst is exhausted, should fail
         assert!(limiter.allow_request().is_err());
+    }
+
+    // ============================================================================
+    // Request ID Middleware Tests
+    // ============================================================================
+
+    #[test]
+    fn test_request_id_middleware_default() {
+        let middleware = RequestIdMiddleware::new();
+        assert_eq!(middleware.header_name, "X-Request-Id");
+        assert_eq!(middleware.strategy, RequestIdStrategy::Uuid);
+        assert!(middleware.store_in_metadata);
+        assert!(middleware.prefix.is_none());
+    }
+
+    #[test]
+    fn test_request_id_middleware_builder() {
+        let middleware = RequestIdMiddleware::new()
+            .with_header_name("X-Trace-Id")
+            .with_strategy(RequestIdStrategy::ShortRandom)
+            .with_prefix("myapp")
+            .with_metadata_key("trace_id");
+
+        assert_eq!(middleware.header_name, "X-Trace-Id");
+        assert_eq!(middleware.strategy, RequestIdStrategy::ShortRandom);
+        assert_eq!(middleware.prefix, Some("myapp".to_string()));
+        assert_eq!(middleware.metadata_key, "trace_id");
+    }
+
+    #[test]
+    fn test_request_id_generate_uuid() {
+        let middleware = RequestIdMiddleware::new()
+            .with_strategy(RequestIdStrategy::Uuid);
+        
+        let id1 = middleware.generate_id();
+        let id2 = middleware.generate_id();
+        
+        // IDs should be different
+        assert_ne!(id1, id2);
+        
+        // UUID format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx (36 chars)
+        assert_eq!(id1.len(), 36);
+        assert!(id1.contains('-'));
+    }
+
+    #[test]
+    fn test_request_id_generate_timestamp() {
+        let middleware = RequestIdMiddleware::new()
+            .with_strategy(RequestIdStrategy::Timestamp);
+        
+        let id = middleware.generate_id();
+        
+        // Timestamp should be numeric
+        assert!(id.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_request_id_generate_short_random() {
+        let middleware = RequestIdMiddleware::new()
+            .with_strategy(RequestIdStrategy::ShortRandom);
+        
+        let id1 = middleware.generate_id();
+        let id2 = middleware.generate_id();
+        
+        // IDs should be different
+        assert_ne!(id1, id2);
+        
+        // Should be 8 characters
+        assert_eq!(id1.len(), 8);
+        
+        // Should be base62 characters
+        assert!(id1.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_request_id_generate_with_prefix() {
+        let middleware = RequestIdMiddleware::new()
+            .with_strategy(RequestIdStrategy::ShortRandom)
+            .with_prefix("myapp");
+        
+        let id = middleware.generate_id();
+        
+        // Should start with prefix
+        assert!(id.starts_with("myapp-"));
+    }
+
+    #[test]
+    fn test_request_id_generate_counter() {
+        let middleware = RequestIdMiddleware::new()
+            .with_strategy(RequestIdStrategy::PrefixedCounter)
+            .with_prefix("req");
+        
+        let id = middleware.generate_id();
+        
+        // Should start with prefix
+        assert!(id.starts_with("req-"));
+    }
+
+    #[tokio::test]
+    async fn test_request_id_middleware_adds_header() {
+        let middleware = RequestIdMiddleware::new();
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        
+        middleware.before_request(&mut ctx).await.unwrap();
+        
+        // Should have X-Request-Id header
+        assert!(ctx.headers.contains_key("x-request-id"));
+        
+        // Should have request_id in metadata
+        assert!(ctx.metadata.contains_key("request_id"));
+        
+        // Header and metadata should match
+        let header_value = ctx.headers.get("x-request-id").unwrap();
+        let metadata_value = ctx.metadata.get("request_id").unwrap();
+        assert_eq!(header_value.to_str().unwrap(), metadata_value);
+    }
+
+    #[tokio::test]
+    async fn test_request_id_middleware_custom_header() {
+        let middleware = RequestIdMiddleware::new()
+            .with_header_name("X-Correlation-Id")
+            .with_metadata_key("correlation_id");
+        
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        middleware.before_request(&mut ctx).await.unwrap();
+        
+        // Should have custom header
+        assert!(ctx.headers.contains_key("x-correlation-id"));
+        assert!(!ctx.headers.contains_key("x-request-id"));
+        
+        // Should have custom metadata key
+        assert!(ctx.metadata.contains_key("correlation_id"));
+    }
+
+    #[tokio::test]
+    async fn test_request_id_middleware_no_metadata() {
+        let middleware = RequestIdMiddleware::new()
+            .with_store_in_metadata(false);
+        
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        middleware.before_request(&mut ctx).await.unwrap();
+        
+        // Should have header
+        assert!(ctx.headers.contains_key("x-request-id"));
+        
+        // Should NOT have metadata
+        assert!(!ctx.metadata.contains_key("request_id"));
+    }
+
+    #[tokio::test]
+    async fn test_request_id_middleware_unique_ids() {
+        let middleware = RequestIdMiddleware::new();
+        
+        let mut ctx1 = RequestContext::new("GET", "https://example.com/1");
+        let mut ctx2 = RequestContext::new("GET", "https://example.com/2");
+        
+        middleware.before_request(&mut ctx1).await.unwrap();
+        middleware.before_request(&mut ctx2).await.unwrap();
+        
+        let id1 = ctx1.metadata.get("request_id").unwrap();
+        let id2 = ctx2.metadata.get("request_id").unwrap();
+        
+        // Each request should have a unique ID
+        assert_ne!(id1, id2);
     }
 }
