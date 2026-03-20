@@ -97,6 +97,27 @@ impl DownloadResult {
     }
 
     /// Override the auto-detected file extension with a custom one
+    /// 
+    /// This method allows you to manually specify the file extension
+    /// instead of relying on automatic detection from the Content-Type header.
+    /// 
+    /// # Arguments
+    /// * `extension` - File extension (with or without leading dot)
+    /// 
+    /// # Returns
+    /// Self for method chaining
+    /// 
+    /// # Example
+    /// ```
+    /// # use caller::DownloadResult;
+    /// # use reqwest::StatusCode;
+    /// # let _result = DownloadResult::from_response(
+    /// #     StatusCode::OK,
+    /// #     b"Hello, World!".to_vec(),
+    /// #     Some("text/plain".to_string())
+    /// # ).unwrap();
+    /// # // result.save_to_file("/path/to/file.txt").unwrap();
+    /// ```
     pub fn with_extension(mut self, extension: &str) -> Self {
         let ext = if let Some(stripped) = extension.strip_prefix('.') {
             stripped.to_string()
@@ -108,18 +129,96 @@ impl DownloadResult {
     }
 
     /// Set a suggested filename for the download
+    /// 
+    /// This filename will be used when saving the file with the `save` method.
+    /// If no filename is set, a default filename will be generated using the base name
+    /// and the detected file extension.
+    /// 
+    /// # Arguments
+    /// * `filename` - Suggested filename (can include extension or not)
+    /// 
+    /// # Returns
+    /// Self for method chaining
+    /// 
+    /// # Example
+    /// ```
+    /// # use caller::DownloadResult;
+    /// # use reqwest::StatusCode;
+    /// # let result = DownloadResult::from_response(
+    /// #     StatusCode::OK,
+    /// #     b"content".to_vec(),
+    /// #     Some("text/plain".to_string())
+    /// # ).unwrap()
+    /// # .with_filename("my-file.txt".to_string());
+    /// ```
     pub fn with_filename(mut self, filename: String) -> Self {
         self.suggested_filename = Some(filename);
         self
     }
 
-    /// Save the content to a file
+    /// Save the downloaded content to a specific file path
+    /// 
+    /// This method writes the content to the specified path.
+    /// Parent directories must already exist.
+    /// 
+    /// # Arguments
+    /// * `path` - File path to save to
+    /// 
+    /// # Returns
+    /// Ok(()) if successful, Err if writing fails
+    /// 
+    /// # Errors
+    /// Returns CallerError::IoError if the file cannot be written
+    /// 
+    /// # Example
+    /// ```
+    /// # use caller::DownloadResult;
+    /// # use reqwest::StatusCode;
+    /// # let _result = DownloadResult::from_response(
+    /// #     StatusCode::OK,
+    /// #     b"Hello, World!".to_vec(),
+    /// #     Some("text/plain".to_string())
+    /// # ).unwrap();
+    /// # // result.save_to_file("/path/to/file.txt").unwrap();
+    /// ```
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), CallerError> {
         std::fs::write(path, &self.content)?;
         Ok(())
     }
 
     /// Save to a file with automatic filename based on URL or content type
+    /// 
+    /// This is a convenience method that automatically generates a filename
+    /// and saves the file to the specified directory. The directory will be
+    /// created if it doesn't exist.
+    /// 
+    /// The filename is generated as follows:
+    /// 1. If a suggested filename was set with `with_filename`, use that
+    /// 2. Otherwise, use `{base_name}.{extension}`
+    /// 
+    /// # Arguments
+    /// * `directory` - Directory to save the file in (will be created if needed)
+    /// * `base_name` - Base name for the file (used if no suggested filename)
+    /// 
+    /// # Returns
+    /// Ok(filename) if successful, Err if writing fails
+    /// 
+    /// # Errors
+    /// Returns CallerError::IoError if the file cannot be written
+    /// 
+    /// # Example
+    /// ```
+    /// # use caller::DownloadResult;
+    /// # use reqwest::StatusCode;
+    /// # let result = DownloadResult::from_response(
+    /// #     StatusCode::OK,
+    /// #     b"content".to_vec(),
+    /// #     Some("text/plain".to_string())
+    /// # ).unwrap();
+    /// # // Saves to "downloads/myfile.txt"
+    /// # let filename = result.save("downloads", "myfile").unwrap();
+    /// # println!("Saved as: {}", filename);
+    /// ```
     pub fn save<P: AsRef<Path>>(&self, directory: P, base_name: &str) -> Result<String, CallerError> {
         let dir = directory.as_ref();
         std::fs::create_dir_all(dir)?;
@@ -137,11 +236,49 @@ impl DownloadResult {
     }
 
     /// Get the file size in bytes
+    /// 
+    /// # Returns
+    /// The size of the downloaded content in bytes
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::DownloadResult;
+    /// use reqwest::StatusCode;
+    /// 
+    /// let result = DownloadResult::from_response(
+    ///     StatusCode::OK,
+    ///     b"Hello".to_vec(),
+    ///     Some("text/plain".to_string())
+    /// ).unwrap();
+    /// 
+    /// assert_eq!(result.size(), 5);
+    /// ```
     pub fn size(&self) -> usize {
         self.content.len()
     }
 
     /// Get human-readable file size
+    /// 
+    /// Converts the file size to a human-readable format with appropriate units
+    /// (B, KB, MB, GB). The size is automatically scaled to the most
+    /// appropriate unit.
+    /// 
+    /// # Returns
+    /// A string representing the size in human-readable format
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::DownloadResult;
+    /// use reqwest::StatusCode;
+    /// 
+    /// let result = DownloadResult::from_response(
+    ///     StatusCode::OK,
+    ///     vec![0u8; 1024 * 1024 * 2],  // 2 MB
+    ///     Some("application/octet-stream".to_string())
+    /// ).unwrap();
+    /// 
+    /// assert_eq!(result.size_human(), "2.00 MB");
+    /// ```
     pub fn size_human(&self) -> String {
         let bytes = self.content.len() as f64;
         let units = ["B", "KB", "MB", "GB"];
@@ -156,7 +293,30 @@ impl DownloadResult {
         format!("{:.2} {}", size, units[unit_index])
     }
 
-    /// Try to parse content as UTF-8 text
+    /// Try to parse the content as UTF-8 text
+    /// 
+    /// This method attempts to interpret the downloaded bytes as UTF-8 text.
+    /// It's useful for downloading text-based files like JSON, XML, or plain text.
+    /// 
+    /// # Returns
+    /// Ok(&str) if the content is valid UTF-8, Err otherwise
+    /// 
+    /// # Errors
+    /// Returns CallerError::IoError if the content is not valid UTF-8
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::DownloadResult;
+    /// use reqwest::StatusCode;
+    /// 
+    /// let result = DownloadResult::from_response(
+    ///     StatusCode::OK,
+    ///     b"Hello, World!".to_vec(),
+    ///     Some("text/plain".to_string())
+    /// ).unwrap();
+    /// 
+    /// assert_eq!(result.as_text().unwrap(), "Hello, World!");
+    /// ```
     pub fn as_text(&self) -> Result<&str, CallerError> {
         std::str::from_utf8(&self.content)
             .map_err(|e| CallerError::IoError(format!("Failed to decode as UTF-8: {}", e)))

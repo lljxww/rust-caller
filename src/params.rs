@@ -140,7 +140,14 @@ impl From<ParamValue> for Value {
 }
 
 impl ParamValue {
-    /// 转换为字符串（用于兼容旧的 HashMap 方式）
+    /// Convert to string representation (for backward compatibility with HashMap-based approach)
+    /// 
+    /// Converts the param value to a string representation:
+    /// - String values are returned as-is
+    /// - Numeric values are converted to their string representation
+    /// - Boolean values are converted to "true" or "false"
+    /// - Null values are converted to "null"
+    /// - Array and Object values are serialized as JSON strings
     pub fn to_string_lossy(&self) -> String {
         match self {
             ParamValue::String(s) => s.clone(),
@@ -161,12 +168,44 @@ pub struct CallParams {
 }
 
 impl CallParams {
-    /// 创建新的参数构建器
+    /// Create a new empty CallParams builder
+    /// 
+    /// # Returns
+    /// A new CallParams instance with no parameters
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::CallParams;
+    /// 
+    /// let params = CallParams::new();
+    /// assert!(params.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 添加一个参数
+    /// Add a single parameter to the builder
+    /// 
+    /// # Type Parameters
+    /// * `K` - Key type that can be converted to String
+    /// * `V` - Value type that can be converted to ParamValue
+    /// 
+    /// # Arguments
+    /// * `key` - Parameter key
+    /// * `value` - Parameter value
+    /// 
+    /// # Returns
+    /// Self for method chaining
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::CallParams;
+    /// 
+    /// let params = CallParams::new()
+    ///     .add("name", "Alice")
+    ///     .add("age", 30)
+    ///     .add("active", true);
+    /// ```
     pub fn add<K, V>(mut self, key: K, value: V) -> Self
     where
         K: Into<String>,
@@ -176,7 +215,29 @@ impl CallParams {
         self
     }
 
-    /// 添加多个参数
+    /// Add multiple parameters from an iterable
+    /// 
+    /// # Type Parameters
+    /// * `K` - Key type that can be converted to String
+    /// * `V` - Value type that can be converted to ParamValue
+    /// 
+    /// # Arguments
+    /// * `iter` - An iterator of (key, value) pairs
+    /// 
+    /// # Returns
+    /// Self for method chaining
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::CallParams;
+    /// 
+    /// let params = CallParams::new()
+    ///     .add_many(vec![
+    ///         ("name", "Alice"),
+    ///         ("age", "30"),
+    ///         ("active", "true"),
+    ///     ]);
+    /// ```
     pub fn add_many<K, V>(mut self, iter: impl IntoIterator<Item = (K, V)>) -> Self
     where
         K: Into<String>,
@@ -188,7 +249,27 @@ impl CallParams {
         self
     }
 
-    /// 从 HashMap<String, String> 转换
+    /// Create CallParams from a HashMap<String, String>
+    /// 
+    /// This is useful for converting legacy HashMap-based parameters to CallParams
+    /// 
+    /// # Arguments
+    /// * `hashmap` - HashMap with string keys and values
+    /// 
+    /// # Returns
+    /// A new CallParams instance
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::CallParams;
+    /// use std::collections::HashMap;
+    /// 
+    /// let mut map = HashMap::new();
+    /// map.insert("name".to_string(), "Alice".to_string());
+    /// map.insert("age".to_string(), "30".to_string());
+    /// 
+    /// let params = CallParams::from_hashmap(map);
+    /// ```
     pub fn from_hashmap(hashmap: HashMap<String, String>) -> Self {
         let params = hashmap
             .into_iter()
@@ -197,7 +278,27 @@ impl CallParams {
         Self { params }
     }
 
-    /// 从 JSON 值转换
+    /// Create CallParams from a JSON Value
+    /// 
+    /// # Arguments
+    /// * `value` - A JSON object value (serde_json::Value)
+    /// 
+    /// # Returns
+    /// Ok(CallParams) if the value is an object, Err otherwise
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::CallParams;
+    /// use serde_json::json;
+    /// 
+    /// let json_value = json!({
+    ///     "name": "Alice",
+    ///     "age": 30,
+    ///     "active": true
+    /// });
+    /// 
+    /// let params = CallParams::from_json(json_value).unwrap();
+    /// ```
     pub fn from_json(value: Value) -> Result<Self, String> {
         match value {
             Value::Object(obj) => {
@@ -211,7 +312,12 @@ impl CallParams {
         }
     }
 
-    /// 转换为 HashMap<String, String>（用于兼容旧代码）
+    /// Convert to HashMap<String, String> for backward compatibility
+    /// 
+    /// This method converts all ParamValue instances to their string representation
+    /// 
+    /// # Returns
+    /// A HashMap with string keys and values
     pub fn to_hashmap(&self) -> HashMap<String, String> {
         self.params
             .iter()
@@ -219,7 +325,10 @@ impl CallParams {
             .collect()
     }
 
-    /// 转换为 JSON
+    /// Convert to a JSON Value
+    /// 
+    /// # Returns
+    /// A serde_json::Value representing the parameters
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
         for (key, value) in &self.params {
@@ -231,17 +340,29 @@ impl CallParams {
         Value::Object(map)
     }
 
-    /// 检查是否为空
+    /// Check if the params collection is empty
+    /// 
+    /// # Returns
+    /// true if no parameters are stored, false otherwise
     pub fn is_empty(&self) -> bool {
         self.params.is_empty()
     }
 
-    /// 获取参数数量
+    /// Get the number of parameters stored
+    /// 
+    /// # Returns
+    /// The count of parameters
     pub fn len(&self) -> usize {
         self.params.len()
     }
 
-    /// 获取参数值
+    /// Get a parameter value by key
+    /// 
+    /// # Arguments
+    /// * `key` - The parameter key to look up
+    /// 
+    /// # Returns
+    /// Some(&ParamValue) if the key exists, None otherwise
     pub fn get(&self, key: &str) -> Option<&ParamValue> {
         self.params.get(key)
     }

@@ -19,7 +19,24 @@ pub struct OpenApiGenerator {
 }
 
 impl OpenApiGenerator {
-    /// Create a new generator from loaded configuration
+    /// Create a new OpenAPI generator from Caller configuration
+    /// 
+    /// # Arguments
+    /// * `config` - CallerConfig instance containing API definitions
+    /// 
+    /// # Returns
+    /// A new OpenApiGenerator instance with default settings
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::{OpenApiGenerator, CallerConfig};
+    /// 
+    /// let config = CallerConfig {
+    ///     authorizations: vec![],
+    ///     service_items: vec![],
+    /// };
+    /// let generator = OpenApiGenerator::new(config);
+    /// ```
     pub fn new(config: CallerConfig) -> Self {
         Self {
             config,
@@ -31,44 +48,127 @@ impl OpenApiGenerator {
         }
     }
 
-    /// Create generator from configuration file
+    /// Create generator from currently loaded configuration file
+    /// 
+    /// This is a convenience method that loads the configuration
+    /// that was previously loaded via ConfigLoader.
+    /// 
+    /// # Returns
+    /// Ok(OpenApiGenerator) if config is loaded, Err otherwise
+    /// 
+    /// # Errors
+    /// Returns CallerError if configuration is not loaded
     pub fn from_config_file() -> Result<Self, CallerError> {
         let config = ConfigLoader::get_full_config()?;
         Ok(Self::new(config))
     }
 
-    /// Set API title
+    /// Set the API title for OpenAPI documentation
+    /// 
+    /// # Arguments
+    /// * `title` - API title
+    /// 
+    /// # Returns
+    /// Self for method chaining
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::{OpenApiGenerator, CallerConfig};
+    /// 
+    /// let generator = OpenApiGenerator::new(CallerConfig {
+    ///     authorizations: vec![],
+    ///     service_items: vec![],
+    /// })
+    /// .title("My REST API");
+    /// ```
     pub fn title(mut self, title: &str) -> Self {
         self.title = title.to_string();
         self
     }
 
-    /// Set API version
+    /// Set the API version for OpenAPI documentation
+    /// 
+    /// # Arguments
+    /// * `version` - API version string (e.g., "1.0.0")
+    /// 
+    /// # Returns
+    /// Self for method chaining
     pub fn version(mut self, version: &str) -> Self {
         self.version = version.to_string();
         self
     }
 
-    /// Set API description
+    /// Set the API description for OpenAPI documentation
+    /// 
+    /// # Arguments
+    /// * `description` - API description text
+    /// 
+    /// # Returns
+    /// Self for method chaining
     pub fn description(mut self, description: &str) -> Self {
         self.description = Some(description.to_string());
         self
     }
 
-    /// Enable proxy mode - all requests go through caller proxy
-    /// This allows Swagger UI "Try it out" to work through caller
+    /// Enable or disable proxy mode
+    /// 
+    /// When enabled, all API paths in the OpenAPI spec will route through
+    /// the caller proxy server. This allows Swagger UI "Try it out" to work
+    /// through the caller, enabling authentication and other features.
+    /// 
+    /// # Arguments
+    /// * `enabled` - Whether to enable proxy mode
+    /// 
+    /// # Returns
+    /// Self for method chaining
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::{OpenApiGenerator, CallerConfig};
+    /// 
+    /// let generator = OpenApiGenerator::new(CallerConfig {
+    ///     authorizations: vec![],
+    ///     service_items: vec![],
+    /// })
+    /// .proxy_mode(true)
+    /// .proxy_url("http://localhost:8080");
+    /// ```
     pub fn proxy_mode(mut self, enabled: bool) -> Self {
         self.proxy_mode = enabled;
         self
     }
 
-    /// Set proxy server URL
+    /// Set the proxy server URL for proxy mode
+    /// 
+    /// # Arguments
+    /// * `url` - Proxy server base URL
+    /// 
+    /// # Returns
+    /// Self for method chaining
     pub fn proxy_url(mut self, url: &str) -> Self {
         self.proxy_url = url.to_string();
         self
     }
 
-    /// Generate OpenAPI document
+    /// Generate the complete OpenAPI 3.0.3 document
+    /// 
+    /// This method processes all services and API items from the configuration
+    /// and creates a complete OpenAPI specification.
+    /// 
+    /// # Returns
+    /// An OpenApiDoc containing the complete OpenAPI specification
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::{OpenApiGenerator, CallerConfig};
+    /// 
+    /// let config = CallerConfig {
+    ///     authorizations: vec![],
+    ///     service_items: vec![],
+    /// };
+    /// let doc = OpenApiGenerator::new(config).generate();
+    /// assert_eq!(doc.openapi, "3.0.3");
+    /// ```
     pub fn generate(&self) -> OpenApiDoc {
         let mut paths = HashMap::new();
         let mut servers = Vec::new();
@@ -309,14 +409,50 @@ impl OpenApiGenerator {
         params
     }
 
-    /// Generate OpenAPI JSON string
+    /// Generate OpenAPI specification as JSON string
+    /// 
+    /// This method generates the complete OpenAPI document and serializes
+    /// it to a pretty-printed JSON string suitable for writing to a file.
+    /// 
+    /// # Returns
+    /// Ok(JSON string) if successful, Err if serialization fails
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::{OpenApiGenerator, CallerConfig};
+    /// 
+    /// let config = CallerConfig {
+    ///     authorizations: vec![],
+    ///     service_items: vec![],
+    /// };
+    /// let json = OpenApiGenerator::new(config).to_json().unwrap();
+    /// assert!(json.contains("\"openapi\""));
+    /// ```
     pub fn to_json(&self) -> Result<String, CallerError> {
         let doc = self.generate();
         serde_json::to_string_pretty(&doc)
             .map_err(|e| CallerError::JsonError(format!("Failed to serialize OpenAPI: {}", e)))
     }
 
-    /// Generate OpenAPI YAML string
+    /// Generate OpenAPI specification as YAML string
+    /// 
+    /// This method generates the complete OpenAPI document and serializes
+    /// it to a YAML string suitable for writing to a file.
+    /// 
+    /// # Returns
+    /// Ok(YAML string) if successful, Err if serialization fails
+    /// 
+    /// # Example
+    /// ```
+    /// use caller::{OpenApiGenerator, CallerConfig};
+    /// 
+    /// let config = CallerConfig {
+    ///     authorizations: vec![],
+    ///     service_items: vec![],
+    /// };
+    /// let yaml = OpenApiGenerator::new(config).to_yaml().unwrap();
+    /// assert!(yaml.contains("openapi:"));
+    /// ```
     pub fn to_yaml(&self) -> Result<String, CallerError> {
         let doc = self.generate();
         serde_yaml::to_string(&doc)
