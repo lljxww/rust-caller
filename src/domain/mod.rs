@@ -25,7 +25,7 @@ pub use download_result::DownloadResult;
 pub use middleware::{
     CircuitBreakerMiddleware, CircuitState, HeaderMiddleware, LoggingMiddleware, Middleware,
     MiddlewareChain, RateLimitMiddleware, RateLimitStrategy, RequestContext, ResponseContext,
-    RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
+    RetryMiddleware, TimeoutMiddleware, TimingMiddleware, UserAgentMiddleware,
 };
 pub use retry_config::RetryConfig;
 pub use service_item::ServiceItem;

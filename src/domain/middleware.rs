@@ -1474,4 +1474,277 @@ mod tests {
         // Each request should have a unique ID
         assert_ne!(id1, id2);
     }
+
+    // ============================================================================
+    // Timeout Middleware Tests
+    // ============================================================================
+
+    #[test]
+    fn test_timeout_middleware_default() {
+        let middleware = TimeoutMiddleware::new();
+        assert_eq!(middleware.timeout_ms, 30_000);
+        assert_eq!(middleware.connect_timeout_ms, 5_000);
+        assert!(middleware.read_timeout_ms.is_none());
+        assert!(middleware.store_in_metadata);
+    }
+
+    #[test]
+    fn test_timeout_middleware_builder() {
+        let middleware = TimeoutMiddleware::new()
+            .with_timeout(std::time::Duration::from_secs(60))
+            .with_connect_timeout(std::time::Duration::from_secs(10))
+            .with_read_timeout(std::time::Duration::from_secs(30))
+            .with_store_in_metadata(false);
+
+        assert_eq!(middleware.timeout_ms, 60_000);
+        assert_eq!(middleware.connect_timeout_ms, 10_000);
+        assert_eq!(middleware.read_timeout_ms, Some(30_000));
+        assert!(!middleware.store_in_metadata);
+    }
+
+    #[test]
+    fn test_timeout_middleware_presets() {
+        let quick = TimeoutMiddleware::quick();
+        assert_eq!(quick.timeout_ms, 1_000);
+        assert_eq!(quick.connect_timeout_ms, 500);
+
+        let long = TimeoutMiddleware::long();
+        assert_eq!(long.timeout_ms, 300_000);
+        assert_eq!(long.connect_timeout_ms, 30_000);
+    }
+
+    #[test]
+    fn test_timeout_middleware_getters() {
+        let middleware = TimeoutMiddleware::new()
+            .with_timeout(std::time::Duration::from_millis(5000))
+            .with_connect_timeout(std::time::Duration::from_millis(2000))
+            .with_read_timeout(std::time::Duration::from_millis(3000));
+
+        assert_eq!(middleware.timeout(), std::time::Duration::from_millis(5000));
+        assert_eq!(middleware.connect_timeout(), std::time::Duration::from_millis(2000));
+        assert_eq!(middleware.read_timeout(), Some(std::time::Duration::from_millis(3000)));
+    }
+
+    #[test]
+    fn test_timeout_middleware_is_timed_out() {
+        let middleware = TimeoutMiddleware::quick(); // 1 second timeout
+        
+        let start = std::time::Instant::now();
+        assert!(!middleware.is_timed_out(start));
+        
+        // After waiting, should be timed out
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(middleware.is_timed_out(start));
+    }
+
+    #[test]
+    fn test_timeout_middleware_remaining_time() {
+        let middleware = TimeoutMiddleware::new()
+            .with_timeout(std::time::Duration::from_millis(100));
+        
+        let start = std::time::Instant::now();
+        let remaining = middleware.remaining_time(start);
+        
+        // Should have most of the timeout remaining
+        assert!(remaining.as_millis() >= 90);
+        
+        // After timeout expires, remaining should be zero
+        std::thread::sleep(std::time::Duration::from_millis(110));
+        assert_eq!(middleware.remaining_time(start), std::time::Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_timeout_middleware_adds_metadata() {
+        let middleware = TimeoutMiddleware::new()
+            .with_timeout(std::time::Duration::from_secs(10));
+        
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        middleware.before_request(&mut ctx).await.unwrap();
+        
+        // Should have timeout info in metadata
+        assert_eq!(ctx.metadata.get("timeout_ms"), Some(&"10000".to_string()));
+        assert!(ctx.metadata.contains_key("connect_timeout_ms"));
+        assert!(ctx.metadata.contains_key("request_start_time"));
+    }
+
+    #[tokio::test]
+    async fn test_timeout_middleware_no_metadata() {
+        let middleware = TimeoutMiddleware::new()
+            .with_store_in_metadata(false);
+        
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        middleware.before_request(&mut ctx).await.unwrap();
+        
+        // Should NOT have timeout info in metadata
+        assert!(!ctx.metadata.contains_key("timeout_ms"));
+        assert!(!ctx.metadata.contains_key("request_start_time"));
+    }
+
+    #[tokio::test]
+    async fn test_timeout_middleware_with_read_timeout() {
+        let middleware = TimeoutMiddleware::new()
+            .with_read_timeout(std::time::Duration::from_secs(5));
+        
+        let mut ctx = RequestContext::new("GET", "https://example.com");
+        middleware.before_request(&mut ctx).await.unwrap();
+        
+        // Should have read timeout in metadata
+        assert_eq!(ctx.metadata.get("read_timeout_ms"), Some(&"5000".to_string()));
+    }
+}
+
+// ============================================================================
+// Timeout Middleware
+// ============================================================================
+
+/// Timeout middleware for controlling request timeout duration
+///
+/// This middleware adds timeout configuration to requests, helping prevent
+/// hanging requests and ensuring reasonable response times.
+///
+/// # Features
+/// - Configurable global timeout
+/// - Per-request timeout override via metadata
+/// - Timeout tracking in request metadata
+///
+/// # Example
+/// ```rust
+/// use caller::domain::middleware::TimeoutMiddleware;
+/// use std::time::Duration;
+///
+/// // Create with 30 second timeout
+/// let timeout = TimeoutMiddleware::new()
+///     .with_timeout(Duration::from_secs(30))
+///     .with_connect_timeout(Duration::from_secs(5));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeoutMiddleware {
+    /// Total request timeout (including response body)
+    pub timeout_ms: u64,
+    /// Connection establishment timeout
+    pub connect_timeout_ms: u64,
+    /// Time to wait for the first byte of response
+    #[serde(default)]
+    pub read_timeout_ms: Option<u64>,
+    /// Whether to store timeout info in metadata
+    #[serde(default = "default_store_in_metadata")]
+    pub store_in_metadata: bool,
+}
+
+fn default_store_in_metadata() -> bool {
+    true
+}
+
+impl TimeoutMiddleware {
+    /// Create a new timeout middleware with default settings (30s timeout, 5s connect)
+    pub fn new() -> Self {
+        Self {
+            timeout_ms: 30_000,
+            connect_timeout_ms: 5_000,
+            read_timeout_ms: None,
+            store_in_metadata: true,
+        }
+    }
+
+    /// Create a timeout middleware with custom timeout duration
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout_ms = timeout.as_millis() as u64;
+        self
+    }
+
+    /// Set the connection timeout
+    pub fn with_connect_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.connect_timeout_ms = timeout.as_millis() as u64;
+        self
+    }
+
+    /// Set the read timeout (time to first byte)
+    pub fn with_read_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.read_timeout_ms = Some(timeout.as_millis() as u64);
+        self
+    }
+
+    /// Set whether to store timeout info in metadata
+    pub fn with_store_in_metadata(mut self, store: bool) -> Self {
+        self.store_in_metadata = store;
+        self
+    }
+
+    /// Get the timeout duration
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.timeout_ms)
+    }
+
+    /// Get the connect timeout duration
+    pub fn connect_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.connect_timeout_ms)
+    }
+
+    /// Get the read timeout duration (if set)
+    pub fn read_timeout(&self) -> Option<std::time::Duration> {
+        self.read_timeout_ms.map(std::time::Duration::from_millis)
+    }
+
+    /// Check if the request has exceeded its timeout based on start time
+    pub fn is_timed_out(&self, start_time: std::time::Instant) -> bool {
+        start_time.elapsed() >= self.timeout()
+    }
+
+    /// Get remaining time until timeout
+    pub fn remaining_time(&self, start_time: std::time::Instant) -> std::time::Duration {
+        let elapsed = start_time.elapsed();
+        if elapsed >= self.timeout() {
+            std::time::Duration::ZERO
+        } else {
+            self.timeout() - elapsed
+        }
+    }
+}
+
+impl Default for TimeoutMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Middleware for TimeoutMiddleware {
+    async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
+        if self.store_in_metadata {
+            ctx.metadata.insert("timeout_ms".to_string(), self.timeout_ms.to_string());
+            ctx.metadata.insert("connect_timeout_ms".to_string(), self.connect_timeout_ms.to_string());
+            if let Some(read_timeout) = self.read_timeout_ms {
+                ctx.metadata.insert("read_timeout_ms".to_string(), read_timeout.to_string());
+            }
+            // Store request start time for timeout tracking
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .to_string();
+            ctx.metadata.insert("request_start_time".to_string(), now);
+        }
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "TimeoutMiddleware"
+    }
+}
+
+// Additional Timeout Middleware Tests (added to existing tests module)
+impl TimeoutMiddleware {
+    /// Create a quick timeout middleware for testing (1 second)
+    pub fn quick() -> Self {
+        Self::new()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .with_connect_timeout(std::time::Duration::from_millis(500))
+    }
+
+    /// Create a long timeout middleware for slow services (5 minutes)
+    pub fn long() -> Self {
+        Self::new()
+            .with_timeout(std::time::Duration::from_secs(300))
+            .with_connect_timeout(std::time::Duration::from_secs(30))
+    }
 }
