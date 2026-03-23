@@ -1591,6 +1591,283 @@ mod tests {
         // Should have read timeout in metadata
         assert_eq!(ctx.metadata.get("read_timeout_ms"), Some(&"5000".to_string()));
     }
+
+    // ============================================================================
+    // Cache Middleware Tests
+    // ============================================================================
+
+    #[test]
+    fn test_cache_middleware_default() {
+        let cache = CacheMiddleware::new();
+        assert_eq!(cache.default_ttl_ms, 300_000); // 5 minutes
+        assert_eq!(cache.max_entries, 500);
+        assert!(!cache.cache_post_requests);
+        assert!(cache.respect_cache_control);
+    }
+
+    #[test]
+    fn test_cache_middleware_builder() {
+        let cache = CacheMiddleware::new()
+            .with_ttl(std::time::Duration::from_secs(120))
+            .with_max_entries(1000)
+            .with_cache_post_requests(true)
+            .with_respect_cache_control(false);
+
+        assert_eq!(cache.default_ttl_ms, 120_000);
+        assert_eq!(cache.max_entries, 1000);
+        assert!(cache.cache_post_requests);
+        assert!(!cache.respect_cache_control);
+    }
+
+    #[test]
+    fn test_cache_entry_creation() {
+        let entry = CacheEntry::new("test body".to_string(), 200, 60_000);
+        
+        assert_eq!(entry.body, "test body");
+        assert_eq!(entry.status_code, 200);
+        assert_eq!(entry.ttl_ms, 60_000);
+        assert!(!entry.is_expired());
+    }
+
+    #[test]
+    fn test_cache_entry_with_header() {
+        let entry = CacheEntry::new("body".to_string(), 200, 60_000)
+            .with_header("Content-Type", "application/json");
+        
+        assert_eq!(entry.headers.get("Content-Type"), Some(&"application/json".to_string()));
+    }
+
+    #[test]
+    fn test_cache_entry_expiration() {
+        // Create entry with 1ms TTL
+        let entry = CacheEntry::new("body".to_string(), 200, 1);
+        
+        // Should not be expired immediately
+        assert!(!entry.is_expired());
+        
+        // Wait for expiration
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        
+        // Should be expired now
+        assert!(entry.is_expired());
+    }
+
+    #[test]
+    fn test_cache_generate_key() {
+        let cache = CacheMiddleware::new();
+        
+        let ctx1 = RequestContext::new("GET", "https://example.com/api");
+        let key1 = cache.generate_cache_key(&ctx1);
+        
+        let ctx2 = RequestContext::new("GET", "https://example.com/api");
+        let key2 = cache.generate_cache_key(&ctx2);
+        
+        // Same request should generate same key
+        assert_eq!(key1, key2);
+        
+        // Different URL should generate different key
+        let ctx3 = RequestContext::new("GET", "https://example.com/other");
+        let key3 = cache.generate_cache_key(&ctx3);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_cache_generate_key_with_params() {
+        let cache = CacheMiddleware::new();
+        
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "123".to_string());
+        
+        let ctx = RequestContext::new("GET", "https://example.com/api")
+            .with_params(params);
+        
+        let key = cache.generate_cache_key(&ctx);
+        
+        // Key should include params
+        assert!(key.contains("id=123"));
+    }
+
+    #[test]
+    fn test_cache_should_cache() {
+        let cache = CacheMiddleware::new();
+        
+        assert!(cache.should_cache("GET"));
+        assert!(!cache.should_cache("POST"));
+        assert!(!cache.should_cache("PUT"));
+        assert!(!cache.should_cache("DELETE"));
+        
+        let cache_with_post = CacheMiddleware::new()
+            .with_cache_post_requests(true);
+        
+        assert!(cache_with_post.should_cache("GET"));
+        assert!(cache_with_post.should_cache("POST"));
+        assert!(!cache_with_post.should_cache("PUT"));
+    }
+
+    #[test]
+    fn test_cache_put_and_get() {
+        let mut cache = CacheMiddleware::new()
+            .with_ttl(std::time::Duration::from_secs(60));
+        
+        let key = "test-key".to_string();
+        let entry = CacheEntry::new("cached response".to_string(), 200, 60_000);
+        
+        cache.put(key.clone(), entry);
+        
+        // Should retrieve cached entry
+        let retrieved = cache.get(&key);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().body, "cached response");
+    }
+
+    #[test]
+    fn test_cache_miss() {
+        let mut cache = CacheMiddleware::new();
+        
+        // Get non-existent key
+        let result = cache.get("non-existent");
+        assert!(result.is_none());
+        
+        // Miss count should increase
+        assert_eq!(cache.misses, 1);
+    }
+
+    #[test]
+    fn test_cache_hit_and_miss_stats() {
+        let mut cache = CacheMiddleware::new();
+        
+        let key = "test-key".to_string();
+        let entry = CacheEntry::new("body".to_string(), 200, 60_000);
+        
+        cache.put(key.clone(), entry);
+        
+        // First get is a hit
+        cache.get(&key);
+        assert_eq!(cache.hits, 1);
+        assert_eq!(cache.misses, 0);
+        
+        // Non-existent key is a miss
+        cache.get("other-key");
+        assert_eq!(cache.hits, 1);
+        assert_eq!(cache.misses, 1);
+    }
+
+    #[test]
+    fn test_cache_stats() {
+        let mut cache = CacheMiddleware::new();
+        
+        let key = "test-key".to_string();
+        let entry = CacheEntry::new("body".to_string(), 200, 60_000);
+        cache.put(key.clone(), entry);
+        
+        // 2 hits, 1 miss
+        cache.get(&key);
+        cache.get(&key);
+        cache.get("miss");
+        
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
+        assert!((stats.hit_rate - 0.666).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cache_clear() {
+        let mut cache = CacheMiddleware::new();
+        
+        cache.put("key1".to_string(), CacheEntry::new("body1".to_string(), 200, 60_000));
+        cache.put("key2".to_string(), CacheEntry::new("body2".to_string(), 200, 60_000));
+        
+        assert_eq!(cache.len(), 2);
+        
+        cache.clear();
+        
+        assert!(cache.is_empty());
+        assert_eq!(cache.hits, 0);
+        assert_eq!(cache.misses, 0);
+    }
+
+    #[test]
+    fn test_cache_max_entries_eviction() {
+        let mut cache = CacheMiddleware::new()
+            .with_max_entries(5);
+        
+        // Add 5 entries
+        for i in 0..5 {
+            cache.put(
+                format!("key{}", i),
+                CacheEntry::new(format!("body{}", i), 200, 60_000),
+            );
+        }
+        
+        assert_eq!(cache.len(), 5);
+        
+        // Adding more should trigger eviction
+        cache.put("key5".to_string(), CacheEntry::new("body5".to_string(), 200, 60_000));
+        
+        // Should have evicted some entries
+        assert!(cache.len() <= 5);
+    }
+
+    #[tokio::test]
+    async fn test_cache_middleware_adds_metadata() {
+        let cache = CacheMiddleware::new();
+        let mut ctx = RequestContext::new("GET", "https://example.com/api");
+        
+        cache.before_request(&mut ctx).await.unwrap();
+        
+        // Should have cache_key in metadata
+        assert!(ctx.metadata.contains_key("cache_key"));
+        assert!(ctx.metadata.contains_key("cache_entries"));
+    }
+
+    #[tokio::test]
+    async fn test_cache_middleware_response_metadata() {
+        let cache = CacheMiddleware::new();
+        
+        let req_ctx = RequestContext::new("GET", "https://example.com/api");
+        let mut resp_ctx = ResponseContext::new(200, "ok".to_string(), req_ctx, 100);
+        
+        cache.after_response(&mut resp_ctx).await.unwrap();
+        
+        // Should indicate cache eligibility
+        assert_eq!(
+            resp_ctx.request.metadata.get("cache_eligible"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cache_middleware_post_not_cacheable() {
+        let cache = CacheMiddleware::new(); // cache_post_requests = false
+        
+        let req_ctx = RequestContext::new("POST", "https://example.com/api");
+        let mut resp_ctx = ResponseContext::new(200, "ok".to_string(), req_ctx, 100);
+        
+        cache.after_response(&mut resp_ctx).await.unwrap();
+        
+        // POST should not be cacheable by default
+        assert_eq!(
+            resp_ctx.request.metadata.get("cache_eligible"),
+            Some(&"false".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cache_strategy_variants() {
+        let memory = CacheMiddleware::new()
+            .with_strategy(CacheStrategy::Memory);
+        assert_eq!(memory.strategy, CacheStrategy::Memory);
+        
+        let none = CacheMiddleware::new()
+            .with_strategy(CacheStrategy::None);
+        assert_eq!(none.strategy, CacheStrategy::None);
+        
+        let success_only = CacheMiddleware::new()
+            .with_strategy(CacheStrategy::SuccessOnly);
+        assert_eq!(success_only.strategy, CacheStrategy::SuccessOnly);
+    }
 }
 
 // ============================================================================
@@ -1746,5 +2023,336 @@ impl TimeoutMiddleware {
         Self::new()
             .with_timeout(std::time::Duration::from_secs(300))
             .with_connect_timeout(std::time::Duration::from_secs(30))
+    }
+}
+
+// ============================================================================
+// Cache Middleware
+// ============================================================================
+
+/// A single cache entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheEntry {
+    /// The cached response body
+    pub body: String,
+    /// HTTP status code
+    pub status_code: u16,
+    /// Response headers (serialized as HashMap)
+    pub headers: HashMap<String, String>,
+    /// When the entry was created (UNIX timestamp in milliseconds)
+    pub created_at: u64,
+    /// Time-to-live in milliseconds
+    pub ttl_ms: u64,
+}
+
+impl CacheEntry {
+    /// Create a new cache entry
+    pub fn new(body: String, status_code: u16, ttl_ms: u64) -> Self {
+        Self {
+            body,
+            status_code,
+            headers: HashMap::new(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            ttl_ms,
+        }
+    }
+
+    /// Add a header to the cache entry
+    pub fn with_header(mut self, key: &str, value: &str) -> Self {
+        self.headers.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Check if the cache entry has expired
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        now > self.created_at + self.ttl_ms
+    }
+
+    /// Get remaining time until expiration (in milliseconds)
+    pub fn remaining_ttl(&self) -> u64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.created_at + self.ttl_ms.saturating_sub(now)
+    }
+}
+
+/// Cache storage strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CacheStrategy {
+    /// In-memory cache (default, fastest but not persistent)
+    #[default]
+    Memory,
+    /// No caching (disable cache)
+    None,
+    /// Cache only specific status codes (e.g., 200 only)
+    SuccessOnly,
+}
+
+/// Response caching middleware
+///
+/// Caches GET request responses to reduce redundant API calls and improve performance.
+/// Supports configurable TTL, cache key generation, and multiple caching strategies.
+///
+/// # Features
+/// - Configurable time-to-live (TTL)
+/// - Cache key based on URL + query params
+/// - Optional header-based cache control (respect Cache-Control header)
+/// - Cache hit/miss tracking in metadata
+///
+/// # Example
+/// ```rust
+/// use caller::domain::middleware::CacheMiddleware;
+/// use std::time::Duration;
+///
+/// let cache = CacheMiddleware::new()
+///     .with_ttl(Duration::from_secs(60))     // Cache for 60 seconds
+///     .with_max_entries(1000)                // Max 1000 cached items
+///     .with_cache_post_requests(false);      // Don't cache POST requests
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheMiddleware {
+    /// Default time-to-live for cached entries (in milliseconds)
+    pub default_ttl_ms: u64,
+    /// Maximum number of entries in the cache
+    pub max_entries: usize,
+    /// Whether to cache POST requests (default: false)
+    pub cache_post_requests: bool,
+    /// Caching strategy
+    pub strategy: CacheStrategy,
+    /// Whether to respect Cache-Control headers from server
+    pub respect_cache_control: bool,
+    /// Cache storage (key -> CacheEntry)
+    #[serde(skip)]
+    pub cache: HashMap<String, CacheEntry>,
+    /// Number of cache hits
+    #[serde(skip)]
+    pub hits: u64,
+    /// Number of cache misses
+    #[serde(skip)]
+    pub misses: u64,
+}
+
+impl CacheMiddleware {
+    /// Create a new cache middleware with default settings (5 minute TTL, 500 max entries)
+    pub fn new() -> Self {
+        Self {
+            default_ttl_ms: 300_000, // 5 minutes
+            max_entries: 500,
+            cache_post_requests: false,
+            strategy: CacheStrategy::Memory,
+            respect_cache_control: true,
+            cache: HashMap::new(),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    /// Set the default TTL for cached entries
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.default_ttl_ms = ttl.as_millis() as u64;
+        self
+    }
+
+    /// Set the maximum number of cache entries
+    pub fn with_max_entries(mut self, max: usize) -> Self {
+        self.max_entries = max;
+        self
+    }
+
+    /// Enable or disable caching of POST requests
+    pub fn with_cache_post_requests(mut self, enabled: bool) -> Self {
+        self.cache_post_requests = enabled;
+        self
+    }
+
+    /// Set the caching strategy
+    pub fn with_strategy(mut self, strategy: CacheStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// Enable or disable respecting Cache-Control headers
+    pub fn with_respect_cache_control(mut self, respect: bool) -> Self {
+        self.respect_cache_control = respect;
+        self
+    }
+
+    /// Generate a cache key from request context
+    pub fn generate_cache_key(&self, ctx: &RequestContext) -> String {
+        // Use method + URL + sorted params as cache key
+        let mut key = format!("{}:{}", ctx.method, ctx.url);
+        
+        if let Some(ref params) = ctx.params {
+            // Sort params for consistent key generation
+            let mut sorted_params: Vec<_> = params.iter().collect();
+            sorted_params.sort_by_key(|(k, _)| *k);
+            
+            for (k, v) in sorted_params {
+                key.push_str(&format!("&{}={}", k, v));
+            }
+        }
+        
+        if let Some(ref body) = ctx.body {
+            key.push_str(&format!("|body:{}", body));
+        }
+        
+        key
+    }
+
+    /// Check if caching is enabled for this request method
+    pub fn should_cache(&self, method: &str) -> bool {
+        method == "GET" || (self.cache_post_requests && method == "POST")
+    }
+
+    /// Get a cached response if available and not expired
+    pub fn get(&mut self, key: &str) -> Option<CacheEntry> {
+        // Check if entry exists and is not expired
+        let should_remove = match self.cache.get(key) {
+            Some(entry) => entry.is_expired(),
+            None => {
+                self.misses += 1;
+                return None;
+            }
+        };
+        
+        if should_remove {
+            self.cache.remove(key);
+            self.misses += 1;
+            return None;
+        }
+        
+        self.hits += 1;
+        self.cache.get(key).cloned()
+    }
+
+    /// Store a response in the cache
+    pub fn put(&mut self, key: String, entry: CacheEntry) {
+        // Evict oldest entries if at capacity
+        if self.cache.len() >= self.max_entries {
+            self.evict_oldest();
+        }
+        self.cache.insert(key, entry);
+    }
+
+    /// Remove the oldest entries to make room
+    fn evict_oldest(&mut self) {
+        // Remove at least 1 entry, or 10% of max_entries
+        let to_remove = std::cmp::max(1, self.max_entries / 10);
+        let mut entries: Vec<_> = self.cache.iter()
+            .map(|(k, v)| (k.clone(), v.created_at))
+            .collect();
+        entries.sort_by_key(|(_, t)| *t);
+        
+        for (key, _) in entries.into_iter().take(to_remove) {
+            self.cache.remove(&key);
+        }
+    }
+
+    /// Clear all cached entries
+    pub fn clear(&mut self) {
+        self.cache.clear();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            entries: self.cache.len(),
+            hits: self.hits,
+            misses: self.misses,
+            hit_rate: if self.hits + self.misses > 0 {
+                self.hits as f64 / (self.hits + self.misses) as f64
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Get the number of cached entries
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// Check if the cache is empty
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
+    }
+
+    /// Parse Cache-Control header to get TTL
+    fn parse_cache_control_ttl(&self, headers: &HeaderMap) -> Option<u64> {
+        if !self.respect_cache_control {
+            return None;
+        }
+
+        let cache_control = headers.get("cache-control")?.to_str().ok()?;
+        
+        // Parse max-age directive
+        for directive in cache_control.split(',') {
+            let directive = directive.trim();
+            if let Some(max_age) = directive.strip_prefix("max-age=") {
+                if let Ok(seconds) = max_age.parse::<u64>() {
+                    return Some(seconds * 1000); // Convert to milliseconds
+                }
+            }
+        }
+        
+        None
+    }
+}
+
+impl Default for CacheMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Cache statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStats {
+    /// Number of entries in cache
+    pub entries: usize,
+    /// Number of cache hits
+    pub hits: u64,
+    /// Number of cache misses
+    pub misses: u64,
+    /// Hit rate (0.0 - 1.0)
+    pub hit_rate: f64,
+}
+
+#[async_trait]
+impl Middleware for CacheMiddleware {
+    async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
+        // Add cache key to metadata for potential use
+        let cache_key = self.generate_cache_key(ctx);
+        ctx.metadata.insert("cache_key".to_string(), cache_key);
+        
+        // Add cache stats to metadata
+        ctx.metadata.insert("cache_entries".to_string(), self.cache.len().to_string());
+        
+        Ok(())
+    }
+
+    async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
+        // Indicate that caching is available for this response
+        ctx.request.metadata.insert(
+            "cache_eligible".to_string(),
+            self.should_cache(&ctx.request.method).to_string(),
+        );
+        
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "CacheMiddleware"
     }
 }
