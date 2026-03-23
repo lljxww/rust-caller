@@ -110,7 +110,7 @@ impl From<Value> for ParamValue {
     }
 }
 
-// 为 CallParams 实现 From 以支持转换为 HashMap<String, String>
+// 为 CallParams 实现 From 以转换为 HashMap<String, String>
 impl From<CallParams> for HashMap<String, String> {
     fn from(val: CallParams) -> Self {
         val.to_hashmap()
