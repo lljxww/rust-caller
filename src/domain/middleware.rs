@@ -2299,10 +2299,10 @@ impl CacheMiddleware {
         // Parse max-age directive
         for directive in cache_control.split(',') {
             let directive = directive.trim();
-            if let Some(max_age) = directive.strip_prefix("max-age=") {
-                if let Ok(seconds) = max_age.parse::<u64>() {
-                    return Some(seconds * 1000); // Convert to milliseconds
-                }
+            if let Some(max_age) = directive.strip_prefix("max-age=")
+                && let Ok(seconds) = max_age.parse::<u64>()
+            {
+                return Some(seconds * 1000); // Convert to milliseconds
             }
         }
         
@@ -2348,7 +2348,14 @@ impl Middleware for CacheMiddleware {
             "cache_eligible".to_string(),
             self.should_cache(&ctx.request.method).to_string(),
         );
-        
+
+        // Parse Cache-Control header and add TTL to metadata if available
+        if let Some(ttl_ms) = self.parse_cache_control_ttl(&ctx.headers) {
+            ctx.request
+                .metadata
+                .insert("cache_ttl_ms".to_string(), ttl_ms.to_string());
+        }
+
         Ok(())
     }
 
