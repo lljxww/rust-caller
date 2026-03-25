@@ -1069,6 +1069,308 @@ impl Middleware for RequestIdMiddleware {
     }
 }
 
+// ============================================================================
+// Signing Middleware
+// ============================================================================
+
+/// 签名算法类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SigningAlgorithm {
+    /// HMAC-SHA256
+    #[default]
+    HmacSha256,
+    /// HMAC-SHA512
+    HmacSha512,
+    /// 简单的密钥拼接（不推荐用于生产环境）
+    SimpleConcat,
+}
+
+/// 签名包含的内容
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigningComponents {
+    /// 是否包含 HTTP 方法
+    pub include_method: bool,
+    /// 是否包含 URL 路径
+    pub include_path: bool,
+    /// 是否包含查询参数
+    pub include_query: bool,
+    /// 是否包含请求体
+    pub include_body: bool,
+    /// 是否包含时间戳
+    pub include_timestamp: bool,
+    /// 时间戳格式（如 "%s" 为 Unix 时间戳）
+    pub timestamp_format: String,
+    /// 自定义前缀
+    pub prefix: Option<String>,
+    /// 自定义后缀
+    pub suffix: Option<String>,
+}
+
+impl Default for SigningComponents {
+    fn default() -> Self {
+        Self {
+            include_method: true,
+            include_path: true,
+            include_query: true,
+            include_body: true,
+            include_timestamp: true,
+            timestamp_format: "%s".to_string(), // Unix timestamp
+            prefix: None,
+            suffix: None,
+        }
+    }
+}
+
+/// 请求签名中间件
+///
+/// 为API请求添加签名，支持HMAC-SHA256/SHA512等算法。
+/// 适用于需要API签名验证的场景（如支付接口、开放平台API等）。
+///
+/// # 功能
+/// - 支持多种签名算法（HMAC-SHA256、HMAC-SHA512等）
+/// - 可配置签名内容（方法、路径、参数、body、时间戳）
+/// - 支持将签名放入Header或Metadata
+/// - 自动添加时间戳防重放
+///
+/// # 示例
+/// ```rust
+/// use caller::domain::middleware::{SigningMiddleware, SigningAlgorithm};
+///
+/// // 创建HMAC-SHA256签名中间件
+/// let signing = SigningMiddleware::new("your-secret-key")
+///     .with_algorithm(SigningAlgorithm::HmacSha256)
+///     .with_signature_header("X-Signature")
+///     .with_timestamp_header("X-Timestamp");
+///
+/// // 或者使用简化配置
+/// let signing = SigningMiddleware::simple("your-secret-key");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigningMiddleware {
+    /// 签名密钥
+    pub secret_key: String,
+    /// 签名算法
+    pub algorithm: SigningAlgorithm,
+    /// 签名输出的Header名称
+    pub signature_header: String,
+    /// 时间戳输出的Header名称（None表示不输出）
+    pub timestamp_header: Option<String>,
+    /// 签名组件配置
+    pub components: SigningComponents,
+    /// 是否将签名信息存入metadata
+    pub store_in_metadata: bool,
+}
+
+impl SigningMiddleware {
+    /// 创建新的签名中间件
+    ///
+    /// # 参数
+    /// * `secret_key` - 签名密钥
+    pub fn new(secret_key: &str) -> Self {
+        Self {
+            secret_key: secret_key.to_string(),
+            algorithm: SigningAlgorithm::default(),
+            signature_header: "X-Signature".to_string(),
+            timestamp_header: Some("X-Timestamp".to_string()),
+            components: SigningComponents::default(),
+            store_in_metadata: true,
+        }
+    }
+
+    /// 创建简化版签名中间件（仅签名，不含时间戳）
+    pub fn simple(secret_key: &str) -> Self {
+        Self {
+            secret_key: secret_key.to_string(),
+            algorithm: SigningAlgorithm::HmacSha256,
+            signature_header: "X-Signature".to_string(),
+            timestamp_header: None,
+            components: SigningComponents {
+                include_timestamp: false,
+                ..Default::default()
+            },
+            store_in_metadata: false,
+        }
+    }
+
+    /// 设置签名算法
+    pub fn with_algorithm(mut self, algorithm: SigningAlgorithm) -> Self {
+        self.algorithm = algorithm;
+        self
+    }
+
+    /// 设置签名输出的Header名称
+    pub fn with_signature_header(mut self, header: &str) -> Self {
+        self.signature_header = header.to_string();
+        self
+    }
+
+    /// 设置时间戳输出的Header名称
+    pub fn with_timestamp_header(mut self, header: &str) -> Self {
+        self.timestamp_header = Some(header.to_string());
+        self
+    }
+
+    /// 设置是否包含请求体
+    pub fn with_include_body(mut self, include: bool) -> Self {
+        self.components.include_body = include;
+        self
+    }
+
+    /// 设置是否包含时间戳
+    pub fn with_include_timestamp(mut self, include: bool) -> Self {
+        self.components.include_timestamp = include;
+        self
+    }
+
+    /// 设置签名前缀
+    pub fn with_prefix(mut self, prefix: &str) -> Self {
+        self.components.prefix = Some(prefix.to_string());
+        self
+    }
+
+    /// 设置是否存入metadata
+    pub fn with_store_in_metadata(mut self, store: bool) -> Self {
+        self.store_in_metadata = store;
+        self
+    }
+
+    /// 获取当前时间戳字符串
+    fn get_timestamp(&self) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        now.to_string()
+    }
+
+    /// 构建待签名字符串
+    pub fn build_string_to_sign(&self, ctx: &RequestContext, timestamp: &str) -> String {
+        let mut parts = Vec::new();
+
+        // 添加前缀
+        if let Some(ref prefix) = self.components.prefix {
+            parts.push(prefix.clone());
+        }
+
+        // 添加HTTP方法
+        if self.components.include_method {
+            parts.push(ctx.method.to_uppercase());
+        }
+
+        // 添加URL路径和查询参数
+        if self.components.include_path || self.components.include_query {
+            let url = url::Url::parse(&ctx.url).ok();
+            if let Some(ref parsed_url) = url {
+                if self.components.include_path {
+                    parts.push(parsed_url.path().to_string());
+                }
+                if self.components.include_query && parsed_url.query().is_some() {
+                    parts.push(parsed_url.query().unwrap_or("").to_string());
+                }
+            } else {
+                // 如果URL解析失败，直接使用原始URL
+                parts.push(ctx.url.clone());
+            }
+        }
+
+        // 添加请求体
+        if self.components.include_body {
+            if let Some(ref body) = ctx.body {
+                if !body.is_empty() {
+                    parts.push(body.clone());
+                }
+            }
+        }
+
+        // 添加时间戳
+        if self.components.include_timestamp {
+            parts.push(timestamp.to_string());
+        }
+
+        // 添加后缀
+        if let Some(ref suffix) = self.components.suffix {
+            parts.push(suffix.clone());
+        }
+
+        parts.join("\n")
+    }
+
+    /// 计算签名
+    pub fn calculate_signature(&self, string_to_sign: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::{Sha256, Sha512};
+
+        match self.algorithm {
+            SigningAlgorithm::HmacSha256 => {
+                let mut mac = <Hmac<Sha256>>::new_from_slice(self.secret_key.as_bytes())
+                    .expect("HMAC can take key of any size");
+                mac.update(string_to_sign.as_bytes());
+                hex::encode(mac.finalize().into_bytes())
+            }
+            SigningAlgorithm::HmacSha512 => {
+                let mut mac = <Hmac<Sha512>>::new_from_slice(self.secret_key.as_bytes())
+                    .expect("HMAC can take key of any size");
+                mac.update(string_to_sign.as_bytes());
+                hex::encode(mac.finalize().into_bytes())
+            }
+            SigningAlgorithm::SimpleConcat => {
+                // 简单的密钥拼接（仅用于测试）
+                format!("{}{}", self.secret_key, string_to_sign)
+            }
+        }
+    }
+
+    /// 对请求进行签名并返回签名和时间戳
+    pub fn sign(&self, ctx: &RequestContext) -> (String, String) {
+        let timestamp = self.get_timestamp();
+        let string_to_sign = self.build_string_to_sign(ctx, &timestamp);
+        let signature = self.calculate_signature(&string_to_sign);
+        (signature, timestamp)
+    }
+}
+
+impl Default for SigningMiddleware {
+    fn default() -> Self {
+        Self::new("")
+    }
+}
+
+#[async_trait]
+impl Middleware for SigningMiddleware {
+    async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
+        let (signature, timestamp) = self.sign(ctx);
+
+        // 添加签名Header
+        if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(self.signature_header.as_bytes())
+            && let Ok(header_value) = reqwest::header::HeaderValue::from_str(&signature)
+        {
+            ctx.headers.insert(header_name, header_value);
+        }
+
+        // 添加时间戳Header
+        if let Some(ref ts_header) = self.timestamp_header {
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(ts_header.as_bytes())
+                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(&timestamp)
+            {
+                ctx.headers.insert(header_name, header_value);
+            }
+        }
+
+        // 存入metadata
+        if self.store_in_metadata {
+            ctx.metadata.insert("signature".to_string(), signature.clone());
+            ctx.metadata.insert("signature_timestamp".to_string(), timestamp.clone());
+            ctx.metadata.insert("signature_algorithm".to_string(), format!("{:?}", self.algorithm));
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "SigningMiddleware"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1867,6 +2169,186 @@ mod tests {
         let success_only = CacheMiddleware::new()
             .with_strategy(CacheStrategy::SuccessOnly);
         assert_eq!(success_only.strategy, CacheStrategy::SuccessOnly);
+    }
+
+    // ============================================================================
+    // Signing Middleware Tests
+    // ============================================================================
+
+    #[test]
+    fn test_signing_middleware_new() {
+        let signing = SigningMiddleware::new("test-secret");
+        assert_eq!(signing.secret_key, "test-secret");
+        assert_eq!(signing.algorithm, SigningAlgorithm::HmacSha256);
+        assert_eq!(signing.signature_header, "X-Signature");
+        assert_eq!(signing.timestamp_header, Some("X-Timestamp".to_string()));
+    }
+
+    #[test]
+    fn test_signing_middleware_simple() {
+        let signing = SigningMiddleware::simple("simple-key");
+        assert_eq!(signing.secret_key, "simple-key");
+        assert_eq!(signing.algorithm, SigningAlgorithm::HmacSha256);
+        assert!(signing.timestamp_header.is_none());
+        assert!(!signing.components.include_timestamp);
+    }
+
+    #[test]
+    fn test_signing_middleware_builder() {
+        let signing = SigningMiddleware::new("secret")
+            .with_algorithm(SigningAlgorithm::HmacSha512)
+            .with_signature_header("X-Api-Signature")
+            .with_timestamp_header("X-Api-Timestamp")
+            .with_include_body(false)
+            .with_prefix("MYAPP");
+
+        assert_eq!(signing.algorithm, SigningAlgorithm::HmacSha512);
+        assert_eq!(signing.signature_header, "X-Api-Signature");
+        assert_eq!(signing.timestamp_header, Some("X-Api-Timestamp".to_string()));
+        assert!(!signing.components.include_body);
+        assert_eq!(signing.components.prefix, Some("MYAPP".to_string()));
+    }
+
+    #[test]
+    fn test_signing_algorithm_variants() {
+        assert_eq!(SigningAlgorithm::default(), SigningAlgorithm::HmacSha256);
+    }
+
+    #[test]
+    fn test_signing_build_string_to_sign() {
+        let signing = SigningMiddleware::new("secret");
+        let ctx = RequestContext::new("POST", "https://api.example.com/users?debug=true")
+            .with_body(r#"{"name":"test"}"#.to_string());
+
+        let string_to_sign = signing.build_string_to_sign(&ctx, "1234567890");
+
+        // Should contain method
+        assert!(string_to_sign.contains("POST"));
+        // Should contain path
+        assert!(string_to_sign.contains("/users"));
+        // Should contain timestamp
+        assert!(string_to_sign.contains("1234567890"));
+    }
+
+    #[test]
+    fn test_signing_calculate_signature_hmac_sha256() {
+        let signing = SigningMiddleware::new("my-secret-key")
+            .with_algorithm(SigningAlgorithm::HmacSha256);
+
+        let signature = signing.calculate_signature("test data to sign");
+
+        // Should produce a hex string
+        assert!(signature.chars().all(|c| c.is_ascii_hexdigit()));
+        // Should be consistent
+        let signature2 = signing.calculate_signature("test data to sign");
+        assert_eq!(signature, signature2);
+    }
+
+    #[test]
+    fn test_signing_calculate_signature_hmac_sha512() {
+        let signing = SigningMiddleware::new("my-secret-key")
+            .with_algorithm(SigningAlgorithm::HmacSha512);
+
+        let signature = signing.calculate_signature("test data to sign");
+
+        // Should produce a hex string
+        assert!(signature.chars().all(|c| c.is_ascii_hexdigit()));
+        // SHA-512 produces longer signatures
+        assert!(signature.len() > 64);
+    }
+
+    #[test]
+    fn test_signing_calculate_signature_simple_concat() {
+        let signing = SigningMiddleware::new("my-key")
+            .with_algorithm(SigningAlgorithm::SimpleConcat);
+
+        let signature = signing.calculate_signature("data");
+
+        // Should be key + data
+        assert_eq!(signature, "my-keydata");
+    }
+
+    #[test]
+    fn test_signing_sign_returns_timestamp() {
+        let signing = SigningMiddleware::new("secret");
+        let ctx = RequestContext::new("GET", "https://api.example.com/test");
+
+        let (signature, timestamp) = signing.sign(&ctx);
+
+        // Signature should be hex
+        assert!(signature.chars().all(|c| c.is_ascii_hexdigit()));
+        // Timestamp should be numeric
+        assert!(timestamp.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_signing_different_data_different_signature() {
+        let signing = SigningMiddleware::new("secret");
+
+        let sig1 = signing.calculate_signature("data1");
+        let sig2 = signing.calculate_signature("data2");
+
+        assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn test_signing_different_keys_different_signature() {
+        let signing1 = SigningMiddleware::new("key1");
+        let signing2 = SigningMiddleware::new("key2");
+
+        let sig1 = signing1.calculate_signature("same data");
+        let sig2 = signing2.calculate_signature("same data");
+
+        assert_ne!(sig1, sig2);
+    }
+
+    #[tokio::test]
+    async fn test_signing_middleware_adds_headers() {
+        let signing = SigningMiddleware::new("test-secret");
+        let mut ctx = RequestContext::new("GET", "https://api.example.com/test");
+
+        signing.before_request(&mut ctx).await.unwrap();
+
+        // Should have signature header
+        assert!(ctx.headers.contains_key("x-signature"));
+        // Should have timestamp header
+        assert!(ctx.headers.contains_key("x-timestamp"));
+        // Should have metadata
+        assert!(ctx.metadata.contains_key("signature"));
+        assert!(ctx.metadata.contains_key("signature_timestamp"));
+        assert!(ctx.metadata.contains_key("signature_algorithm"));
+    }
+
+    #[tokio::test]
+    async fn test_signing_middleware_custom_headers() {
+        let signing = SigningMiddleware::new("secret")
+            .with_signature_header("X-Api-Sign")
+            .with_timestamp_header("X-Api-Time");
+
+        let mut ctx = RequestContext::new("POST", "https://api.example.com/data");
+        signing.before_request(&mut ctx).await.unwrap();
+
+        assert!(ctx.headers.contains_key("x-api-sign"));
+        assert!(ctx.headers.contains_key("x-api-time"));
+    }
+
+    #[tokio::test]
+    async fn test_signing_middleware_no_timestamp_header() {
+        let signing = SigningMiddleware::simple("secret");
+        let mut ctx = RequestContext::new("GET", "https://api.example.com/test");
+
+        signing.before_request(&mut ctx).await.unwrap();
+
+        // Should have signature
+        assert!(ctx.headers.contains_key("x-signature"));
+        // Should NOT have timestamp header
+        assert!(!ctx.headers.contains_key("x-timestamp"));
+    }
+
+    #[tokio::test]
+    async fn test_signing_middleware_name() {
+        let signing = SigningMiddleware::new("secret");
+        assert_eq!(signing.name(), "SigningMiddleware");
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "caller"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2024"
 license-file = "LICENSE"
 description = "A WebApi Caller"
@@ -23,6 +23,12 @@ thiserror = "1.0"
 notify = { version = "6", features = ["serde"] }
 async-trait = "0.1"
 futures = "0.3"
+
+# Crypto dependencies for signing middleware
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+url = "2.5"
 
 # Server dependencies (optional)
 axum = { version = "0.8", optional = true }
