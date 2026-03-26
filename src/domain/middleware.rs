@@ -1274,13 +1274,11 @@ impl SigningMiddleware {
         }
 
         // 添加请求体
-        if self.components.include_body {
-            if let Some(ref body) = ctx.body {
-                if !body.is_empty() {
+        if self.components.include_body
+            && let Some(ref body) = ctx.body
+                && !body.is_empty() {
                     parts.push(body.clone());
                 }
-            }
-        }
 
         // 添加时间戳
         if self.components.include_timestamp {
@@ -1348,13 +1346,12 @@ impl Middleware for SigningMiddleware {
         }
 
         // 添加时间戳Header
-        if let Some(ref ts_header) = self.timestamp_header {
-            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(ts_header.as_bytes())
+        if let Some(ref ts_header) = self.timestamp_header
+            && let Ok(header_name) = reqwest::header::HeaderName::from_bytes(ts_header.as_bytes())
                 && let Ok(header_value) = reqwest::header::HeaderValue::from_str(&timestamp)
             {
                 ctx.headers.insert(header_name, header_value);
             }
-        }
 
         // 存入metadata
         if self.store_in_metadata {
