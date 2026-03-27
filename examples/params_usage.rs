@@ -50,26 +50,26 @@ async fn main() -> Result<(), caller::CallerError> {
     
     // ==================== 支持多种数据类型 ====================
     println!("4. 支持多种数据类型:");
-    
+
     // 整数
-    let params_int = params! { "id" => 1 };
     println!("   - 整数: params! {{ \"id\" => 1 }}");
-    
+    params! { "id" => 1 };
+
     // 布尔值
-    let params_bool = params! { "active" => true };
     println!("   - 布尔: params! {{ \"active\" => true }}");
-    
+    params! { "active" => true };
+
     // 浮点数
-    let params_float = params! { "price" => 99.99 };
     println!("   - 浮点: params! {{ \"price\" => 99.99 }}");
-    
+    params! { "price" => 99.99 };
+
     // 字符串
-    let params_str = params! { "name" => "Rust" };
     println!("   - 字符串: params! {{ \"name\" => \"Rust\" }}");
-    
+    params! { "name" => "Rust" };
+
     // 数组
-    let params_arr = params! { "tags" => vec!["rust", "web"] };
     println!("   - 数组: params! {{ \"tags\" => vec![\"rust\", \"web\"] }}");
+    params! { "tags" => vec!["rust", "web"] };
     
     println!("   类型自动推断，无需手动转换！\n");
     
@@ -121,7 +121,7 @@ async fn main() -> Result<(), caller::CallerError> {
         ("key1".to_string(), "value1".to_string()),
         ("key2".to_string(), "value2".to_string()),
     ]);
-    let new_params = CallParams::from_hashmap(old_hashmap);
+    let _new_params = CallParams::from_hashmap(old_hashmap);
     println!("   代码: CallParams::from_hashmap(hashmap)");
     println!("   结果: 可以无缝迁移旧代码！\n");
     
