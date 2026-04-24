@@ -282,7 +282,7 @@ impl ConfigLoader {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use caller::config::config_loader::ConfigLoader;
+    /// use caller::ConfigLoader;
     ///
     /// // Convert JSON to YAML
     /// let result = ConfigLoader::convert_config("config.json", "config.yaml");
@@ -325,7 +325,7 @@ impl ConfigLoader {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use caller::config::config_loader::{ConfigLoader, ConfigFormat};
+    /// use caller::{ConfigFileFormat as ConfigFormat, ConfigLoader};
     ///
     /// // Convert to YAML regardless of output file extension
     /// let result = ConfigLoader::convert_config_with_format("config.json", "config.txt", ConfigFormat::Yaml);
@@ -509,7 +509,7 @@ mod tests {
 
         let err = ConfigLoader::load_config_from_path(path.to_string_lossy().as_ref())
             .expect_err("invalid http method should fail during config load");
-        assert!(matches!(err, CallerError::HttpMethodNotSupported { .. }));
+        assert!(matches!(err, CallerError::ConfigParseError { .. }));
 
         fs::remove_file(path).ok();
     }
@@ -540,7 +540,69 @@ mod tests {
 
         let err = ConfigLoader::load_config_from_path(path.to_string_lossy().as_ref())
             .expect_err("invalid param type should fail during config load");
-        assert!(matches!(err, CallerError::UnsupportedParamType { .. }));
+        assert!(matches!(err, CallerError::ConfigParseError { .. }));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_load_config_rejects_duplicate_param_type_during_parse() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = unique_test_path("duplicate_param_type", "json");
+        let content = r#"{
+  "authorizations": [],
+  "service_items": [
+    {
+      "api_name": "TestService",
+      "base_url": "https://example.com",
+      "api_items": [
+        {
+          "method": "list",
+          "url": "/items",
+          "http_method": "GET",
+          "param_type": "query,query"
+        }
+      ]
+    }
+  ]
+}"#;
+
+        fs::write(&path, content).unwrap();
+
+        let err = ConfigLoader::load_config_from_path(path.to_string_lossy().as_ref())
+            .expect_err("duplicate param type should fail during config load");
+        assert!(matches!(err, CallerError::ConfigParseError { .. }));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_load_config_rejects_invalid_endpoint_url_during_parse() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = unique_test_path("invalid_endpoint_url", "json");
+        let content = r#"{
+  "authorizations": [],
+  "service_items": [
+    {
+      "api_name": "TestService",
+      "base_url": "https://example.com",
+      "api_items": [
+        {
+          "method": "list",
+          "url": "items",
+          "http_method": "GET",
+          "param_type": "none"
+        }
+      ]
+    }
+  ]
+}"#;
+
+        fs::write(&path, content).unwrap();
+
+        let err = ConfigLoader::load_config_from_path(path.to_string_lossy().as_ref())
+            .expect_err("invalid endpoint url should fail during config load");
+        assert!(matches!(err, CallerError::InvalidUrl { .. }));
 
         fs::remove_file(path).ok();
     }

@@ -124,7 +124,9 @@ mod tests {
     use super::*;
     use crate::config::config_loader::{ConfigLoader, TEST_STATE_LOCK};
     use crate::domain::{
-        api_config::ApiConfig, caller_config::CallerConfig, service_config::ServiceConfig,
+        api_config::{ApiConfig, HttpMethod, ParamType},
+        caller_config::CallerConfig,
+        service_config::ServiceConfig,
     };
 
     fn test_config_with_auth(auth_type: &str) -> CallerConfig {
@@ -138,8 +140,8 @@ mod tests {
                 api_items: vec![ApiConfig {
                     method: "list".to_string(),
                     url: "/items".to_string(),
-                    http_method: "GET".to_string(),
-                    param_type: "none".to_string(),
+                    http_method: HttpMethod::Get,
+                    param_type: vec![ParamType::None],
                     description: None,
                     need_cache: None,
                     cache_time: None,

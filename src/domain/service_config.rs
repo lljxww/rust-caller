@@ -37,28 +37,31 @@ impl ServiceConfig {
 }
 
 fn validate_http_url(url: &str) -> Result<(), CallerError> {
-    let parsed =
-        reqwest::Url::parse(url).map_err(|e| CallerError::InvalidUrlFormat(e.to_string()))?;
+    let parsed = reqwest::Url::parse(url).map_err(|e| CallerError::InvalidUrl {
+        url: url.to_string(),
+        message: e.to_string(),
+    })?;
 
     match parsed.scheme() {
         "http" | "https" => Ok(()),
-        scheme => Err(CallerError::InvalidUrlFormat(format!(
-            "Unsupported URL scheme '{}': {}",
-            scheme, url
-        ))),
+        scheme => Err(CallerError::UnsupportedUrlScheme {
+            url: url.to_string(),
+            scheme: scheme.to_string(),
+        }),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{HttpMethod, ParamType};
 
     fn api(url: &str) -> ApiConfig {
         ApiConfig {
             method: "list".to_string(),
             url: url.to_string(),
-            http_method: "GET".to_string(),
-            param_type: "none".to_string(),
+            http_method: HttpMethod::Get,
+            param_type: vec![ParamType::None],
             description: None,
             need_cache: None,
             cache_time: None,
@@ -94,7 +97,7 @@ mod tests {
         let err = service("not a url", vec![])
             .validate()
             .expect_err("invalid base URL should fail validation");
-        assert!(matches!(err, CallerError::InvalidUrlFormat(_)));
+        assert!(matches!(err, CallerError::InvalidUrl { .. }));
     }
 
     #[test]
@@ -102,7 +105,7 @@ mod tests {
         let err = service("file:///tmp/api", vec![])
             .validate()
             .expect_err("non-http URL should fail validation");
-        assert!(matches!(err, CallerError::InvalidUrlFormat(_)));
+        assert!(matches!(err, CallerError::UnsupportedUrlScheme { .. }));
     }
 
     #[test]
@@ -110,6 +113,6 @@ mod tests {
         let err = service("https://api.example.com", vec![api(":bad")])
             .validate()
             .expect_err("invalid resolved API URL should fail validation");
-        assert!(matches!(err, CallerError::InvalidUrlFormat(_)));
+        assert!(matches!(err, CallerError::InvalidUrl { .. }));
     }
 }

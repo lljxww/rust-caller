@@ -30,12 +30,10 @@ impl BearerAuth {
 
     /// Create from environment variable
     pub fn from_env(var_name: &str) -> Result<Self, CallerError> {
-        let token = std::env::var(var_name).map_err(|_| {
-            CallerError::AuthenticationError(format!(
-                "Environment variable '{}' not found",
-                var_name
-            ))
-        })?;
+        let token =
+            std::env::var(var_name).map_err(|_| CallerError::MissingAuthEnvironmentVariable {
+                name: var_name.to_string(),
+            })?;
         Ok(Self { token })
     }
 
@@ -116,18 +114,14 @@ impl BasicAuth {
     }
 
     pub fn from_env(user_var: &str, pass_var: &str) -> Result<Self, CallerError> {
-        let username = std::env::var(user_var).map_err(|_| {
-            CallerError::AuthenticationError(format!(
-                "Environment variable '{}' not found",
-                user_var
-            ))
-        })?;
-        let password = std::env::var(pass_var).map_err(|_| {
-            CallerError::AuthenticationError(format!(
-                "Environment variable '{}' not found",
-                pass_var
-            ))
-        })?;
+        let username =
+            std::env::var(user_var).map_err(|_| CallerError::MissingAuthEnvironmentVariable {
+                name: user_var.to_string(),
+            })?;
+        let password =
+            std::env::var(pass_var).map_err(|_| CallerError::MissingAuthEnvironmentVariable {
+                name: pass_var.to_string(),
+            })?;
         Ok(Self { username, password })
     }
 
@@ -168,12 +162,10 @@ impl ApiKeyAuth {
     }
 
     pub fn from_env(header_name: &str, var_name: &str) -> Result<Self, CallerError> {
-        let api_key = std::env::var(var_name).map_err(|_| {
-            CallerError::AuthenticationError(format!(
-                "Environment variable '{}' not found",
-                var_name
-            ))
-        })?;
+        let api_key =
+            std::env::var(var_name).map_err(|_| CallerError::MissingAuthEnvironmentVariable {
+                name: var_name.to_string(),
+            })?;
         Ok(Self {
             header_name: header_name.to_string(),
             api_key,
@@ -259,12 +251,10 @@ impl OAuth2Auth {
     }
 
     pub fn from_env(var_name: &str) -> Result<Self, CallerError> {
-        let token = std::env::var(var_name).map_err(|_| {
-            CallerError::AuthenticationError(format!(
-                "Environment variable '{}' not found",
-                var_name
-            ))
-        })?;
+        let token =
+            std::env::var(var_name).map_err(|_| CallerError::MissingAuthEnvironmentVariable {
+                name: var_name.to_string(),
+            })?;
         Ok(Self::new(token))
     }
 

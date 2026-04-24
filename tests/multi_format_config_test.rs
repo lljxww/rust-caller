@@ -1,5 +1,5 @@
 use caller::CallerError;
-use caller::config::config_loader::{ConfigFormat, ConfigLoader};
+use caller::{ConfigFileFormat as ConfigFormat, ConfigLoader};
 use std::fs;
 
 #[test]

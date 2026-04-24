@@ -132,9 +132,10 @@ impl Caller {
     ///
     /// Returns an error if the instance was not created from a file path.
     pub fn reload_config(&self) -> Result<(), CallerError> {
-        let path = self.config_path.as_ref().ok_or_else(|| {
-            CallerError::ConfigError("This Caller instance has no config path".to_string())
-        })?;
+        let path = self
+            .config_path
+            .as_ref()
+            .ok_or(CallerError::MissingCallerConfigPath)?;
         let config = crate::config::config_loader::ConfigLoader::load_config_from_path(
             path.to_string_lossy().as_ref(),
         )?;
@@ -266,12 +267,11 @@ impl Caller {
                     if retry_config.should_retry_status(status)
                         && attempt < retry_config.max_retries
                     {
-                        last_error = Some(CallerError::HttpError(format!(
-                            "HTTP {} - Retrying (attempt {}/{})",
+                        last_error = Some(CallerError::RetryableHttpStatus {
                             status,
-                            attempt + 1,
-                            retry_config.max_retries
-                        )));
+                            attempt: attempt + 1,
+                            max_retries: retry_config.max_retries,
+                        });
                         attempt += 1;
                         continue;
                     }
@@ -290,8 +290,7 @@ impl Caller {
             }
         }
 
-        Err(last_error
-            .unwrap_or_else(|| CallerError::HttpError("All retry attempts exhausted".to_string())))
+        Err(last_error.unwrap_or(CallerError::RetryAttemptsExhausted))
     }
 
     /// Execute a configured API call and collect the response as downloadable bytes.
@@ -470,7 +469,7 @@ impl Caller {
                 context.service_name.clone(),
                 context.api_name.clone(),
                 context.url.clone(),
-                context.api_config.http_method.clone(),
+                context.api_config.http_method.as_str().to_string(),
                 context.params.clone(),
                 auth_type.clone(),
             );
@@ -527,14 +526,16 @@ impl CallerBuilder {
         value: impl AsRef<str>,
     ) -> Result<Self, CallerError> {
         let header_name = header::HeaderName::from_bytes(key.as_ref().as_bytes()).map_err(|e| {
-            CallerError::parameter_error(format!("Invalid header name '{}': {}", key.as_ref(), e))
+            CallerError::InvalidHeaderName {
+                name: key.as_ref().to_string(),
+                message: e.to_string(),
+            }
         })?;
         let header_value = header::HeaderValue::from_str(value.as_ref()).map_err(|e| {
-            CallerError::parameter_error(format!(
-                "Invalid header value for '{}': {}",
-                key.as_ref(),
-                e
-            ))
+            CallerError::InvalidHeaderValue {
+                name: key.as_ref().to_string(),
+                message: e.to_string(),
+            }
         })?;
         self.default_headers.insert(header_name, header_value);
         Ok(self)
@@ -543,7 +544,10 @@ impl CallerBuilder {
     /// Set the default `User-Agent` header for this instance.
     pub fn user_agent(mut self, value: impl AsRef<str>) -> Result<Self, CallerError> {
         let user_agent = header::HeaderValue::from_str(value.as_ref()).map_err(|e| {
-            CallerError::parameter_error(format!("Invalid user-agent '{}': {}", value.as_ref(), e))
+            CallerError::InvalidUserAgent {
+                value: value.as_ref().to_string(),
+                message: e.to_string(),
+            }
         })?;
         self.user_agent = Some(user_agent);
         Ok(self)
@@ -578,18 +582,16 @@ impl CallerBuilder {
                     path.to_string_lossy().as_ref(),
                 )?
             }
-            (None, None) => {
-                return Err(CallerError::ConfigError(
-                    "CallerBuilder requires either config or config_path".to_string(),
-                ));
-            }
+            (None, None) => return Err(CallerError::MissingCallerBuilderConfig),
         };
         config.validate()?;
 
         let client = match self.client {
             Some(client) => client,
             None => reqwest::Client::builder().build().map_err(|e| {
-                CallerError::NetworkError(format!("Failed to create HTTP client: {}", e))
+                CallerError::HttpClientBuildError {
+                    message: e.to_string(),
+                }
             })?,
         };
 
@@ -667,6 +669,7 @@ fn percent_decode(s: &str) -> Result<String, std::string::FromUtf8Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HttpMethod;
     use crate::NoAuth;
 
     fn make_config(base_url: &str, auth_type: Option<&str>) -> CallerConfig {
@@ -680,8 +683,8 @@ mod tests {
                 api_items: vec![ApiConfig {
                     method: "list".to_string(),
                     url: "/items".to_string(),
-                    http_method: "GET".to_string(),
-                    param_type: "none".to_string(),
+                    http_method: HttpMethod::Get,
+                    param_type: vec![ParamType::None],
                     description: None,
                     need_cache: None,
                     cache_time: None,
@@ -726,10 +729,7 @@ mod tests {
             .call("Svc.list", None)
             .await
             .expect_err("caller with auth should reach network layer");
-        assert!(matches!(
-            err,
-            CallerError::NetworkError(_) | CallerError::HttpError(_)
-        ));
+        assert!(err.is_network_error());
     }
 
     #[test]
@@ -764,20 +764,20 @@ mod tests {
             .default_header("bad header", "value")
             .err()
             .expect("invalid header name should fail");
-        assert!(matches!(err, CallerError::ParameterError(_)));
+        assert!(matches!(err, CallerError::InvalidHeaderName { .. }));
 
         let err = Caller::builder()
             .config(make_config("https://api.example.com", None))
             .user_agent("bad\r\nagent")
             .err()
             .expect("invalid user-agent should fail");
-        assert!(matches!(err, CallerError::ParameterError(_)));
+        assert!(matches!(err, CallerError::InvalidUserAgent { .. }));
     }
 
     #[test]
     fn test_from_config_rejects_invalid_api_shape() {
         let mut config = make_config("https://api.example.com", None);
-        config.service_items[0].api_items[0].param_type = "none,query".to_string();
+        config.service_items[0].api_items[0].param_type = vec![ParamType::None, ParamType::Query];
 
         let err = Caller::from_config(config)
             .err()

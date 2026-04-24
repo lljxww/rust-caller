@@ -337,7 +337,7 @@ impl OpenApiGenerator {
 mod tests {
     use super::*;
     use crate::client::Caller;
-    use crate::domain::api_config::ApiConfig;
+    use crate::domain::api_config::{ApiConfig, HttpMethod, ParamType};
     use crate::domain::caller_config::CallerConfig;
     use crate::domain::service_config::ServiceConfig;
 
@@ -353,8 +353,8 @@ mod tests {
                     ApiConfig {
                         method: "list".to_string(),
                         url: "/items".to_string(),
-                        http_method: "GET".to_string(),
-                        param_type: "query".to_string(),
+                        http_method: HttpMethod::Get,
+                        param_type: vec![ParamType::Query],
                         description: Some("List all items".to_string()),
                         need_cache: None,
                         cache_time: None,
@@ -366,8 +366,8 @@ mod tests {
                     ApiConfig {
                         method: "get".to_string(),
                         url: "/items/{id}".to_string(),
-                        http_method: "GET".to_string(),
-                        param_type: "path".to_string(),
+                        http_method: HttpMethod::Get,
+                        param_type: vec![ParamType::Path],
                         description: Some("Get item by ID".to_string()),
                         need_cache: None,
                         cache_time: None,
@@ -379,8 +379,8 @@ mod tests {
                     ApiConfig {
                         method: "create".to_string(),
                         url: "/items".to_string(),
-                        http_method: "POST".to_string(),
-                        param_type: "json".to_string(),
+                        http_method: HttpMethod::Post,
+                        param_type: vec![ParamType::Json],
                         description: Some("Create new item".to_string()),
                         need_cache: None,
                         cache_time: None,

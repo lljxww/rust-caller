@@ -263,15 +263,15 @@ pub struct ApiEndpointBuilder<'a> {
     api: ApiConfig,
 }
 
-fn join_param_types<I>(param_types: I) -> String
+fn collect_param_types<I>(param_types: I) -> Vec<ParamType>
 where
     I: IntoIterator<Item = ParamType>,
 {
-    let values: Vec<&'static str> = param_types.into_iter().map(ParamType::as_str).collect();
+    let values: Vec<ParamType> = param_types.into_iter().collect();
     if values.is_empty() {
-        ParamType::None.as_str().to_string()
+        vec![ParamType::None]
     } else {
-        values.join(",")
+        values
     }
 }
 
@@ -299,8 +299,10 @@ impl<'a> ServiceBuilder<'a> {
         self.service.api_items.push(ApiConfig {
             method: method.to_string(),
             url: url.to_string(),
-            http_method: http_method.to_string(),
-            param_type: param_type.to_string(),
+            http_method: HttpMethod::parse(http_method)
+                .expect("ServiceBuilder::api received an invalid http_method"),
+            param_type: ApiConfig::parse_param_types(param_type)
+                .expect("ServiceBuilder::api received an invalid param_type"),
             description: None,
             need_cache: None,
             cache_time: None,
@@ -325,7 +327,7 @@ impl<'a> ServiceBuilder<'a> {
     ///     .build();
     ///
     /// let config = builder.build();
-    /// assert_eq!(config.service_items[0].api_items[0].http_method, "GET");
+    /// assert_eq!(config.service_items[0].api_items[0].http_method, HttpMethod::Get);
     /// ```
     pub fn api_typed<I>(
         self,
@@ -337,12 +339,21 @@ impl<'a> ServiceBuilder<'a> {
     where
         I: IntoIterator<Item = ParamType>,
     {
-        self.api(
-            method,
-            url,
-            http_method.as_str(),
-            &join_param_types(param_types),
-        )
+        let mut service_builder = self;
+        service_builder.service.api_items.push(ApiConfig {
+            method: method.to_string(),
+            url: url.to_string(),
+            http_method,
+            param_type: collect_param_types(param_types),
+            description: None,
+            need_cache: None,
+            cache_time: None,
+            content_type: None,
+            authorization_type: None,
+            timeout: None,
+            use_new_http_client: None,
+        });
+        service_builder
     }
 
     /// Start a typed builder for a single API endpoint.
@@ -354,8 +365,8 @@ impl<'a> ServiceBuilder<'a> {
             api: ApiConfig {
                 method: method.to_string(),
                 url: url.to_string(),
-                http_method: HttpMethod::Get.as_str().to_string(),
-                param_type: ParamType::None.as_str().to_string(),
+                http_method: HttpMethod::Get,
+                param_type: vec![ParamType::None],
                 description: None,
                 need_cache: None,
                 cache_time: None,
@@ -383,13 +394,13 @@ impl<'a> ServiceBuilder<'a> {
 impl<'a> ApiEndpointBuilder<'a> {
     /// Set the endpoint HTTP method.
     pub fn http_method(mut self, http_method: HttpMethod) -> Self {
-        self.api.http_method = http_method.as_str().to_string();
+        self.api.http_method = http_method;
         self
     }
 
     /// Set a single parameter kind such as [`ParamType::Query`].
     pub fn param_type(mut self, param_type: ParamType) -> Self {
-        self.api.param_type = param_type.as_str().to_string();
+        self.api.param_type = vec![param_type];
         self
     }
 
@@ -398,7 +409,7 @@ impl<'a> ApiEndpointBuilder<'a> {
     where
         I: IntoIterator<Item = ParamType>,
     {
-        self.api.param_type = join_param_types(param_types);
+        self.api.param_type = collect_param_types(param_types);
         self
     }
 
@@ -510,8 +521,8 @@ mod tests {
 
         let config = builder.build();
         let api = &config.service_items[0].api_items[0];
-        assert_eq!(api.http_method, "GET");
-        assert_eq!(api.param_type, "query,json");
+        assert_eq!(api.http_method, HttpMethod::Get);
+        assert_eq!(api.param_types_as_str(), "query,json");
     }
 
     #[test]
@@ -531,8 +542,8 @@ mod tests {
 
         let config = builder.build();
         let api = &config.service_items[0].api_items[0];
-        assert_eq!(api.http_method, "POST");
-        assert_eq!(api.param_type, "path,json");
+        assert_eq!(api.http_method, HttpMethod::Post);
+        assert_eq!(api.param_types_as_str(), "path,json");
         assert_eq!(api.description.as_deref(), Some("Create an item"));
         assert_eq!(api.content_type.as_deref(), Some("application/json"));
         assert_eq!(api.authorization_type.as_deref(), Some("token"));

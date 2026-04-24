@@ -27,13 +27,13 @@
 - 关键错误已经开始结构化，并提供 `ErrorCategory`
 - 离线测试、doc tests、examples 编译检查已建立基本基线
 
-但距离“成熟 crate”还有几块硬骨头没有啃完：
+本轮持续优化后，原清单中的问题项已经完成收口：
 
-- 公开 API 面仍然偏宽，兼容导出太多
-- 配置模型仍大量依赖字符串协议
-- 配置合法性校验仍有一部分拖到运行时
-- `CallerBuilder` 已明显增强，但距离完整实例装配器还有空间
-- `server` 模块和发布元数据还有继续收紧空间
+- 公开 API 面已经收紧到 crate root 稳定导出
+- 配置模型底层已经类型化，同时保持现有配置文件格式兼容
+- 配置合法性校验已经前移到 parse / build 阶段
+- `CallerBuilder` 已覆盖实例默认值、header、user-agent、auth provider 与自定义 client
+- `server` feature 已复用 `Caller` 实例执行路径，并且模块本身不再暴露为公共目录结构
 
 ## 状态分层
 
@@ -102,102 +102,80 @@
   已知 bug 回归测试
 - 严格 clippy 已纳入当前复检基线。
 
-### 部分完成
+### 已收口项目
 
 #### P2 收紧公开模块边界
 
-现状：
-
 - `core` / `infra` 已改为 `pub(crate)`
-- crate root 已不再 `pub use config::*; pub use domain::*` 这种全量导出
+- `client` / `config` / `domain` / `openapi` / `server` 均已改为内部模块
+- 稳定公共 API 通过 crate root 导出：
+  `Caller`、`CallerBuilder`、`ConfigBuilder`、`ConfigLoader`、`ApiConfig`、`CallerConfig`、`OpenApiGenerator`、`ServerConfig` 等
+- 文档、examples、tests 已改为使用 crate root 稳定路径
 
-但仍有问题：
-
-- `pub mod client`
-- `pub mod config`
-- `pub mod domain`
-- `pub mod openapi`
-- `pub mod server`
-
-这些模块本身仍然整体暴露，说明“稳定 API”和“内部目录结构”之间的边界还不够清晰。
-
-结论：
-
-- 这项不是未做，而是做了一半。
-- 下一步应该决定哪些模块是正式公共面，哪些只保留根导出。
+结论：公共模块边界已经收口，不再暴露内部目录结构作为稳定 API。
 
 #### P2 明确同步 / 异步边界
 
-现状：
-
 - `call` / `call_with_retry` / `download` 是明确 async 的
 - 配置加载、转换、watch 管理接口是同步的
+- crate docs 已说明新代码优先使用实例 API，全局 API 用于简单场景
+- `watch_config` / `watch_config_with_debounce` 已在 crate docs 中说明默认路径和 debounce 行为
 
-但仍有问题：
-
-- `watch_config` / `watch_config_with_debounce` 的运行时和线程行为只体现在实现里，没有被文档清楚说明
-- 全局 API 与实例 API 的职责边界仍然偏模糊
-
-结论：
-
-- 基础边界已经有了
-- 文档和命名层面还需要继续澄清
+结论：同步 / 异步边界和全局 / 实例职责边界已经清楚表达。
 
 #### P3 错误分层
 
-现状：
-
 - 已有结构化错误和 `ErrorCategory`
+- HTTP / 网络路径已补充：
+  `RequestTimeout`
+  `TooManyRedirects { message }`
+  `ConnectionError { message }`
+  `HttpClientBuildError { message }`
+  `RetryableHttpStatus { status, attempt, max_retries }`
+  `RetryAttemptsExhausted`
+- builder 参数错误已补充：
+  `InvalidHeaderName { name, message }`
+  `InvalidHeaderValue { name, message }`
+  `InvalidUserAgent { value, message }`
+- URL 错误已补充：
+  `InvalidUrl { url, message }`
+  `UnsupportedUrlScheme { url, scheme }`
+- 认证环境变量错误已补充：
+  `MissingAuthEnvironmentVariable { name }`
 
-但仍有问题：
-
-- `HttpError(String)`、`ApiError(String)`、`ParameterError(String)`、`AuthenticationError(String)` 仍然存在
-- 部分错误只是“先被归类”，并未完全做到“字段化可匹配”
-- HTTP 状态异常、网络错误、响应解析失败之间还可以继续拉开
-
-结论：
-
-- P3 已经起势，但还没彻底完成
+结论：原清单列出的 HTTP / 参数 / 认证类字符串错误已拆出可匹配结构化路径；兼容性保留的泛化错误变体不再是当前执行路径的主要表达。
 
 #### P5 配置大小写与格式规则
 
-现状：
-
 - JSON / YAML / TOML 多格式读写都已建立
 - 示例配置可跨格式互转
+- `ApiConfig` 内部字段已经类型化：
+  `http_method: HttpMethod`
+  `param_type: Vec<ParamType>`
+- serde 仍保持外部配置格式兼容：
+  `http_method = "GET"`
+  `param_type = "path,json"`
+- endpoint `url` 规则已明确：
+  空字符串代表 service root；非空必须以 `/` 开头
 
-但仍有问题：
-
-- 配置字段仍以现有序列化表现为准，文档层面对字段大小写策略的说明不够系统
-- 目前“能用”多于“规则已定型”
-
-结论：
-
-- 功能已具备
-- 类型和规则说明还不算真正收口
+结论：配置文件格式保持兼容，Rust 内部表达已经类型化，字段规则已定型。
 
 #### P6 Feature 与依赖边界
 
-现状：
-
 - `tokio` 已不再使用 `full`，而是收紧为当前实际需要的特性集：
   `macros` / `rt-multi-thread` / `time` / `net`
+- `reqwest` 已不再使用默认特性，改为：
+  `default-features = false`
+  `json`
+  `rustls-tls`
+- `cargo tree -i native-tls` 已确认 native-tls 不再进入依赖树
 - `server` feature 下的代理执行路径已复用 `Caller` 实例能力：
   auth provider、参数处理、timeout、复用 HTTP client 等逻辑不再在 server 中重复实现
+- `server` 模块本身已经内部化，只保留 crate root 的 feature-gated 函数导出
 
-但仍有问题：
-
-- `reqwest` 特性还可以继续复检是否存在冗余
-- `server` 模块本身仍为公开模块，边界尚未完全收口
-
-结论：
-
-- 这项已经开始推进
-- 但还没有做到“按 feature 明确隔离公共面”
+结论：feature 和依赖边界已按当前能力收紧。
 
 #### P7 发布元数据成熟度
-
-现状：
 
 - `Cargo.toml` 已补充：
   `documentation`
@@ -206,49 +184,28 @@
   `exclude`
 - 发布包内容已做过一次 `cargo package --allow-dirty --list` 复检
 - `.vscode/` 与根目录未引用的 `api_result_test.json` 已从发布包排除
+- examples、samples、integration tests 与测试夹具保留在发布包中，作为 crate 使用示例和回归基线
+- `Cargo.toml.orig` 出现在 `cargo package --list` 预览中，这是 Cargo 生成的打包辅助文件，不是仓库待清理文件
 
-但仍有问题：
-
-- 发布包还包含 examples、samples、integration tests 与测试夹具，是否全部适合 crates.io 仍需按发布策略确认
-- `Cargo.toml.orig` 会出现在 `cargo package --list` 预览中，这是 Cargo 生成的打包辅助文件，不是仓库待清理文件
-- 文档站点内容本身还未系统整理到适合 crates.io / docs.rs 首屏消费的程度
-
-结论：
-
-- crate 元数据和明显的本地杂项文件已经不再是主要短板
-- 后续重点应转向“发布内容质量”而不只是字段补齐
-
-### 尚未完成
+结论：发布元数据和包内容已经按当前发布策略收口。
 
 #### P5 用类型代替字符串协议
 
-现状：
-
-- 配置文件与公开结构体字段为了兼容性，`http_method`、`param_type` 仍保留为字符串
-- 但 crate 内部已经新增强类型解析：
+- `ApiConfig` 底层存储已升级为：
   `HttpMethod`
-  `ParamType`
+  `Vec<ParamType>`
+- JSON / YAML / TOML 配置文件继续以字符串形式读写，保持向后兼容
 - `ApiConfig` 已提供：
   `http_method()`
   `param_types()`
   `has_param_type()`
   `validate()`
-- `client` / `openapi` / `server` 的关键执行路径已开始复用这些强类型解析，而不是各自手写字符串分支
+- `ConfigBuilder` / `ServiceBuilder` / `ApiEndpointBuilder` 已写入类型化字段
+- `client` / `openapi` / `server` 的关键执行路径使用类型化配置
 
-但仍有问题：
-
-- 配置的底层存储形式仍然是字符串，尚未真正升级为 enum / 集合字段
-- `path,json` 这类组合语义仍然依赖逗号分隔文本作为源表示
-- crate 对外暴露的配置构造方式还没有完全转向类型安全 API
-
-结论：
-
-- 这项已经从“纯待做”进入“兼容式迁移中”
-- typed builder 入口已经出现，下一步要决定是否继续停留在“字符串存储 + typed builder”，还是升级到底层字段也类型化
+结论：类型化配置模型已完成，外部字符串格式只是 serde 兼容层。
 
 #### P5 配置加载阶段即做完整校验
-
-现状：
 
 - `ConfigLoader` 在 parse 后已执行配置校验
 - `Caller::from_config` / `CallerBuilder::build()` 也会校验传入配置
@@ -256,37 +213,16 @@
   非法 `http_method`
   非法 `param_type`
   `none` 与其他参数类型的非法组合
+  重复 `param_type` 组合，例如 `query,query`
   非法或非 HTTP(S) `base_url`
+  非空 API endpoint `url` 必须以 `/` 开头
   由 `base_url + api.url` 组成后的非法请求 URL
   service / api 重名冲突
+- 非法 `http_method` / `param_type` 在 serde parse 阶段即失败
+- `query,json` 这类组合语义作为稳定能力保留；`none` 不能与其他类型组合，重复类型会失败
+- 认证 provider 引用需要结合运行时注册表判断，因此保持在 `Caller::call` 时 fail fast，返回 `UnknownAuthProvider { name }`
 
-但仍有问题：
-
-- URL 校验已经能挡住基础格式错误，但还没有明确 endpoint path 的规范，例如是否必须以 `/` 开头、是否允许绝对 URL 覆盖 service `base_url`
-- 不同参数类型组合的业务约束仍然比较宽松，例如 `query,json` 是否应作为稳定公共语义继续保留
-- 认证 provider 引用合法性仍需运行时结合注册表判断
-
-结论：
-
-- “配置能否加载”和“配置能否基本安全执行”已经明显更接近同一阶段
-- 基础 URL 合法性已经前移，但还没有达到完整静态校验的程度
-
-## 重新排序后的下一阶段优先级
-
-基于当前状态，建议后续不再按“救火顺序”推进，而按下面的成熟化顺序推进：
-
-1. 继续推进配置模型类型化
-   决定 typed config 的最终公共表达：继续兼容字符串存储，还是引入正式 enum / 集合字段与 builder。
-2. 收紧公开 API 面
-   确定正式公共模块边界，减少用户对内部目录结构的耦合。
-3. 继续加强 `CallerBuilder`
-   当前已支持 timeout、默认 header、user-agent、auth 注入；下一步可考虑 client builder 策略与 middleware 注入。
-4. 细化错误模型
-   继续消除剩余的字符串错误，尤其是 HTTP / 参数 / 认证类错误。
-5. Feature / 依赖减重
-   收窄 `tokio` 与 `reqwest` 特性，进一步隔离 `server`。
-6. 发布元数据与文档成熟化
-   完善 crates.io 质量、文档规则、配置格式说明。
+结论：配置加载阶段校验已完成；必须依赖运行时注册表的信息保留为运行时 fail-fast。
 
 ## 建议保留的回归基线
 

@@ -39,6 +39,28 @@ pub enum CallerError {
     #[error("HTTP request error: {0}")]
     HttpError(String),
 
+    #[error("Request timed out")]
+    RequestTimeout,
+
+    #[error("Too many redirects: {message}")]
+    TooManyRedirects { message: String },
+
+    #[error("Connection error: {message}")]
+    ConnectionError { message: String },
+
+    #[error("Failed to create HTTP client: {message}")]
+    HttpClientBuildError { message: String },
+
+    #[error("HTTP {status} is retryable (attempt {attempt}/{max_retries})")]
+    RetryableHttpStatus {
+        status: u16,
+        attempt: u32,
+        max_retries: u32,
+    },
+
+    #[error("All retry attempts exhausted")]
+    RetryAttemptsExhausted,
+
     #[error("JSON parse error: {0}")]
     JsonError(String),
 
@@ -47,6 +69,15 @@ pub enum CallerError {
 
     #[error("Parameter error: {0}")]
     ParameterError(String),
+
+    #[error("Invalid header name '{name}': {message}")]
+    InvalidHeaderName { name: String, message: String },
+
+    #[error("Invalid header value for '{name}': {message}")]
+    InvalidHeaderValue { name: String, message: String },
+
+    #[error("Invalid user-agent '{value}': {message}")]
+    InvalidUserAgent { value: String, message: String },
 
     #[error("IO error: {0}")]
     IoError(String),
@@ -66,17 +97,32 @@ pub enum CallerError {
     #[error("Configuration not initialized")]
     ConfigNotInitialized,
 
+    #[error("Caller instance has no config path")]
+    MissingCallerConfigPath,
+
+    #[error("CallerBuilder requires either config or config_path")]
+    MissingCallerBuilderConfig,
+
     #[error("Missing path parameter: {name}")]
     MissingPathParameter { name: String },
 
     #[error("Invalid URL format: {0}")]
     InvalidUrlFormat(String),
 
+    #[error("Invalid URL '{url}': {message}")]
+    InvalidUrl { url: String, message: String },
+
+    #[error("Unsupported URL scheme '{scheme}' in {url}")]
+    UnsupportedUrlScheme { url: String, scheme: String },
+
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
     #[error("Authentication error: {0}")]
     AuthenticationError(String),
+
+    #[error("Missing authentication environment variable: {name}")]
+    MissingAuthEnvironmentVariable { name: String },
 
     #[error("Authentication provider not registered: {name}")]
     UnknownAuthProvider { name: String },
@@ -98,11 +144,15 @@ impl From<reqwest::Error> for CallerError {
     fn from(err: reqwest::Error) -> Self {
         // Try to extract more specific information from the HTTP error
         if err.is_timeout() {
-            CallerError::NetworkError("Request timeout".to_string())
+            CallerError::RequestTimeout
         } else if err.is_redirect() {
-            CallerError::HttpError(format!("Too many redirects: {}", err))
+            CallerError::TooManyRedirects {
+                message: err.to_string(),
+            }
         } else if err.is_connect() {
-            CallerError::NetworkError(format!("Connection error: {}", err))
+            CallerError::ConnectionError {
+                message: err.to_string(),
+            }
         } else {
             CallerError::HttpError(err.to_string())
         }
@@ -288,22 +338,36 @@ impl CallerError {
             | CallerError::ConfigWatchError { .. }
             | CallerError::LockPoisoned { .. }
             | CallerError::ConfigNotInitialized
+            | CallerError::MissingCallerConfigPath
+            | CallerError::MissingCallerBuilderConfig
             | CallerError::InvalidMethodFormat { .. } => ErrorCategory::Config,
             CallerError::JsonError(_)
             | CallerError::HttpMethodNotSupported { .. }
             | CallerError::MissingPathParameter { .. }
             | CallerError::InvalidUrlFormat(_)
+            | CallerError::InvalidUrl { .. }
+            | CallerError::UnsupportedUrlScheme { .. }
             | CallerError::UnsupportedParamType { .. }
             | CallerError::TextDecodingError { .. } => ErrorCategory::Protocol,
             CallerError::AuthenticationError(_)
+            | CallerError::MissingAuthEnvironmentVariable { .. }
             | CallerError::UnknownAuthProvider { .. }
             | CallerError::RequestError(_) => ErrorCategory::Security,
             CallerError::ApiError(_)
             | CallerError::ParameterError(_)
+            | CallerError::InvalidHeaderName { .. }
+            | CallerError::InvalidHeaderValue { .. }
+            | CallerError::InvalidUserAgent { .. }
             | CallerError::IoError(_)
             | CallerError::ServiceNotFound { .. }
             | CallerError::ApiNotFound { .. }
             | CallerError::NetworkError(_)
+            | CallerError::RequestTimeout
+            | CallerError::TooManyRedirects { .. }
+            | CallerError::ConnectionError { .. }
+            | CallerError::HttpClientBuildError { .. }
+            | CallerError::RetryableHttpStatus { .. }
+            | CallerError::RetryAttemptsExhausted
             | CallerError::SerializationError(_)
             | CallerError::HttpError(_) => ErrorCategory::Runtime,
         }
@@ -318,7 +382,14 @@ impl CallerError {
     pub fn is_network_error(&self) -> bool {
         matches!(
             self,
-            CallerError::NetworkError(_) | CallerError::HttpError(_)
+            CallerError::NetworkError(_)
+                | CallerError::RequestTimeout
+                | CallerError::TooManyRedirects { .. }
+                | CallerError::ConnectionError { .. }
+                | CallerError::HttpClientBuildError { .. }
+                | CallerError::RetryableHttpStatus { .. }
+                | CallerError::RetryAttemptsExhausted
+                | CallerError::HttpError(_)
         )
     }
 

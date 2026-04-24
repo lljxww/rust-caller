@@ -1,7 +1,7 @@
 //! Interactive CLI for configuration management
 
 use crate::config::{ConfigBuilder, ConfigFormat};
-use crate::domain::api_config::ApiConfig;
+use crate::domain::api_config::{ApiConfig, HttpMethod};
 use std::io::{self, Write};
 
 /// Run the configuration management CLI
@@ -84,8 +84,8 @@ fn add_service(builder: &mut ConfigBuilder) -> Result<(), Box<dyn std::error::Er
         let api = ApiConfig {
             method,
             url,
-            http_method: http_method.to_uppercase(),
-            param_type,
+            http_method: HttpMethod::parse(&http_method)?,
+            param_type: ApiConfig::parse_param_types(&param_type)?,
             description: if description.trim().is_empty() {
                 None
             } else {
@@ -122,7 +122,12 @@ fn list_services(builder: &ConfigBuilder) -> Result<(), Box<dyn std::error::Erro
             println!("  📁 {} - {}", svc.api_name, svc.base_url);
             println!("     APIs: {}", svc.api_items.len());
             for api in &svc.api_items {
-                println!("       • {} [{}] {}", api.method, api.http_method, api.url);
+                println!(
+                    "       • {} [{}] {}",
+                    api.method,
+                    api.http_method.as_str(),
+                    api.url
+                );
             }
         }
     }
@@ -227,8 +232,8 @@ fn add_api(builder: &mut ConfigBuilder) -> Result<(), Box<dyn std::error::Error>
     let api = ApiConfig {
         method,
         url,
-        http_method: http_method.to_uppercase(),
-        param_type,
+        http_method: HttpMethod::parse(&http_method)?,
+        param_type: ApiConfig::parse_param_types(&param_type)?,
         description: if description.trim().is_empty() {
             None
         } else {

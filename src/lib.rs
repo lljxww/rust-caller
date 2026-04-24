@@ -60,11 +60,10 @@
 //! For in-memory config construction, use [`ConfigBuilder`] together with
 //! typed helpers such as [`HttpMethod`] and [`ParamType`].
 //!
-pub mod client;
-// Public modules retained for compatibility
-pub mod config;
+mod client;
+mod config;
 pub(crate) mod core;
-pub mod domain;
+mod domain;
 pub(crate) mod infra;
 pub mod openapi;
 pub mod params;
@@ -438,8 +437,8 @@ mod tests {
                 api_items: vec![ApiConfig {
                     method: "list".to_string(),
                     url: "/items".to_string(),
-                    http_method: "GET".to_string(),
-                    param_type: "none".to_string(),
+                    http_method: HttpMethod::Get,
+                    param_type: vec![ParamType::None],
                     description: None,
                     need_cache: None,
                     cache_time: None,
@@ -470,10 +469,7 @@ mod tests {
         let err = call("GlobalSvc.list", None)
             .await
             .expect_err("configured auth should let request reach network layer");
-        assert!(matches!(
-            err,
-            CallerError::NetworkError(_) | CallerError::HttpError(_)
-        ));
+        assert!(err.is_network_error());
 
         clear_auth().unwrap();
         ConfigLoader::reset_state_for_test();

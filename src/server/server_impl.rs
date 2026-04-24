@@ -315,13 +315,14 @@ const SWAGGER_UI_HTML: &str = r#"<!DOCTYPE html>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{HttpMethod, ParamType};
 
     fn api(url: &str) -> ApiConfig {
         ApiConfig {
             method: "get".to_string(),
             url: url.to_string(),
-            http_method: "GET".to_string(),
-            param_type: "path".to_string(),
+            http_method: HttpMethod::Get,
+            param_type: vec![ParamType::Path],
             description: None,
             need_cache: None,
             cache_time: None,

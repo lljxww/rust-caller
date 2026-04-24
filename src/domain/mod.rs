@@ -14,12 +14,7 @@ pub mod service_config;
 pub use api_config::{ApiConfig, HttpMethod, ParamType};
 pub use api_result::{ApiResult, ResponseBody};
 pub use auth_config::AuthConfig;
-pub use auth_registry::AuthRegistry;
 pub use auth_trait::{AuthContext, AuthProvider, Authenticator};
-pub use builtin_auth::{
-    ApiKeyAuth, BasicAuth, BearerAuth, CustomHeaderAuth, DynamicApiKeyAuth, DynamicBearerAuth,
-    DynamicHeaderAuth, NoAuth, OAuth2Auth,
-};
 pub use caller_config::CallerConfig;
 pub use download_result::DownloadResult;
 pub use middleware::{
