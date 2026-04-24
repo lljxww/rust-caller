@@ -174,13 +174,13 @@ mod tests {
 
         // First retry: 100ms * 2^0 = 100ms
         assert_eq!(config.calculate_delay(0), Duration::from_millis(100));
-        
+
         // Second retry: 100ms * 2^1 = 200ms
         assert_eq!(config.calculate_delay(1), Duration::from_millis(200));
-        
+
         // Third retry: 100ms * 2^2 = 400ms
         assert_eq!(config.calculate_delay(2), Duration::from_millis(400));
-        
+
         // Fourth retry: 100ms * 2^3 = 800ms
         assert_eq!(config.calculate_delay(3), Duration::from_millis(800));
     }
@@ -198,13 +198,13 @@ mod tests {
     #[test]
     fn test_should_retry_status() {
         let config = RetryConfig::default();
-        
+
         assert!(config.should_retry_status(429)); // Too Many Requests
         assert!(config.should_retry_status(500)); // Internal Server Error
         assert!(config.should_retry_status(502)); // Bad Gateway
         assert!(config.should_retry_status(503)); // Service Unavailable
-        assert!(config.should_retry_status(504)); // Gateway Timeout
-        
+        assert!(config.should_retry_status(504)); // Gateway timeout
+
         assert!(!config.should_retry_status(200)); // OK
         assert!(!config.should_retry_status(404)); // Not Found
         assert!(!config.should_retry_status(401)); // Unauthorized

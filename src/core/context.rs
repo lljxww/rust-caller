@@ -1,365 +1,5 @@
-use super::constants;
-use crate::config::config_loader::ConfigLoader;
-use crate::domain::auth_trait::AuthContext;
-use crate::domain::auth_registry::AuthRegistry;
-use crate::domain::retry_config::RetryConfig;
-use crate::domain::service_item::ServiceItem;
-use crate::domain::{api_item::ApiItem, api_result::ApiResult, download_result::DownloadResult};
 use crate::shared::error::CallerError;
-use reqwest::{Method, header};
 use std::collections::HashMap;
-use std::time::Duration;
-
-/// Default timeout in milliseconds (30 seconds)
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-
-pub(crate) struct CallerContext {
-    #[allow(dead_code)]
-    pub service_name: String,
-    #[allow(dead_code)]
-    pub api_name: String,
-    #[allow(dead_code)]
-    pub service_item: ServiceItem,
-    pub api_item: ApiItem,
-    pub http_method: Method,
-    pub url: String,
-    pub params: Option<HashMap<String, String>>,
-    /// Resolved authorization type (ApiItem overrides ServiceItem)
-    pub auth_type: Option<String>,
-}
-
-impl CallerContext {
-    pub fn build(
-        method: &str,
-        params: Option<HashMap<String, String>>,
-    ) -> Result<CallerContext, CallerError> {
-        let splited_method = split_method(method)?;
-
-        let service_name = &splited_method[0];
-        let api_name = &splited_method[1];
-
-        let (service_item, api_item, base_url) =
-            ConfigLoader::get_config_with_base_url(service_name, api_name)?;
-
-        let mut url = format!("{}{}", base_url, api_item.url);
-
-        // Parse parameter types (supports single type like "path" or combined like "path,json")
-        let param_type_lower = api_item.param_type.to_lowercase();
-        let param_types: Vec<&str> = param_type_lower.split(',').collect();
-
-        // Handle path parameters if present in param types
-        if param_types.contains(&"path") {
-            let params_map = params.as_ref().ok_or_else(|| {
-                CallerError::parameter_error(
-                    "Path parameters are required for this API".to_string(),
-                )
-            })?;
-            validate_path_parameters(&url, params_map.keys().map(|s| s.as_str()).collect())?;
-            url = substitute_path_parameters(&url, params_map)?;
-        }
-
-        let http_method = get_http_method(&api_item.http_method)?;
-
-        // Resolve authorization type: ApiItem takes precedence over ServiceItem
-        let auth_type = api_item
-            .authorization_type
-            .clone()
-            .or_else(|| service_item.authorization_type.clone());
-
-        Ok(CallerContext {
-            service_name: service_name.to_string(),
-            api_name: api_name.to_string(),
-            service_item,
-            api_item,
-            http_method,
-            url,
-            params,
-            auth_type,
-        })
-    }
-
-    /// Create authentication context for this request
-    fn create_auth_context(&self) -> Option<AuthContext> {
-        self.auth_type.as_ref().map(|auth_type| {
-            AuthContext::new(
-                self.service_name.clone(),
-                self.api_name.clone(),
-                self.url.clone(),
-                self.api_item.http_method.clone(),
-                self.params.clone(),
-                auth_type.clone(),
-            )
-        })
-    }
-
-    /// Apply authentication to the request builder
-    async fn apply_auth(
-        &self,
-        builder: reqwest::RequestBuilder,
-    ) -> Result<reqwest::RequestBuilder, CallerError> {
-        if let Some(auth_type) = &self.auth_type
-            && let Some(provider) = AuthRegistry::get(auth_type)
-        {
-            let context = self.create_auth_context().unwrap();
-            return provider.apply(builder, &context).await;
-        }
-        // If auth_type is specified but no provider registered, log warning but continue
-        // This allows for graceful degradation
-        Ok(builder)
-    }
-
-    pub async fn call(
-        method: &str,
-        params: Option<HashMap<String, String>>,
-    ) -> Result<ApiResult, CallerError> {
-        let context = CallerContext::build(method, params)?;
-        
-        // Get timeout from API config or use default
-        let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
-        let timeout = Duration::from_millis(timeout_ms as u64);
-        
-        // Clone http_method before using it
-        let http_method = context.http_method.clone();
-        let url = context.url.clone();
-        
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-
-        let mut rb = client
-            .request(http_method, &url)
-            .header(header::USER_AGENT, constants::UA)
-            .header(header::CONTENT_TYPE, constants::DEFAULT_CONTENT_TYPE);
-
-        if let Some(params_map) = &context.params {
-            // Parse parameter types (supports single type like "path" or combined like "path,json")
-            let param_type_lower = context.api_item.param_type.to_lowercase();
-            let param_types: Vec<&str> = param_type_lower.split(',').collect();
-
-            // Handle each parameter type
-            for param_type in param_types {
-                match param_type.trim() {
-                    "query" => rb = rb.query(params_map),
-                    "json" => rb = rb.json(params_map),
-                    "form" => rb = rb.form(params_map),
-                    "path" => {
-                        // Path parameters were already substituted in URL construction
-                        // No additional processing needed for request body
-                    }
-                    "none" => {
-                        // No parameters needed for the request body
-                    }
-                    unsupported => {
-                        return Err(CallerError::parameter_error(format!(
-                            "Unsupported parameter type: {}",
-                            unsupported
-                        )));
-                    }
-                }
-            }
-        }
-
-        // Apply authentication
-        rb = context.apply_auth(rb).await?;
-
-        let response = rb.send().await?;
-
-        let status_code = response.status();
-        let result = response.text().await?;
-
-        ApiResult::build(result, status_code)
-    }
-
-    /// Call API with retry support using exponential backoff
-    pub async fn call_with_retry(
-        method: &str,
-        params: Option<HashMap<String, String>>,
-        retry_config: RetryConfig,
-    ) -> Result<ApiResult, CallerError> {
-        let context = CallerContext::build(method, params)?;
-        
-        // Get timeout from API config or use default
-        let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
-        let timeout = Duration::from_millis(timeout_ms as u64);
-        
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-
-        let mut last_error: Option<CallerError> = None;
-        let mut attempt = 0u32;
-
-        while attempt <= retry_config.max_retries {
-            if attempt > 0 {
-                let delay = retry_config.calculate_delay(attempt - 1);
-                tokio::time::sleep(delay).await;
-            }
-
-            let mut rb = client
-                .request(context.http_method.clone(), &context.url)
-                .header(header::USER_AGENT, constants::UA)
-                .header(header::CONTENT_TYPE, constants::DEFAULT_CONTENT_TYPE);
-
-            if let Some(params_map) = &context.params {
-                // Parse parameter types (supports single type like "path" or combined like "path,json")
-                let param_type_lower = context.api_item.param_type.to_lowercase();
-                let param_types: Vec<&str> = param_type_lower.split(',').collect();
-
-                // Handle each parameter type
-                for param_type in param_types {
-                    match param_type.trim() {
-                        "query" => rb = rb.query(params_map),
-                        "json" => rb = rb.json(params_map),
-                        "form" => rb = rb.form(params_map),
-                        "path" => {
-                            // Path parameters were already substituted in URL construction
-                            // No additional processing needed for request body
-                        }
-                        "none" => {
-                            // No parameters needed for the request body
-                        }
-                        unsupported => {
-                            return Err(CallerError::parameter_error(format!(
-                                "Unsupported parameter type: {}",
-                                unsupported
-                            )));
-                        }
-                    }
-                }
-            }
-
-            // Apply authentication
-            rb = context.apply_auth(rb).await?;
-
-            match rb.send().await {
-                Ok(response) => {
-                    let status_code = response.status();
-                    let status = status_code.as_u16();
-
-                    // Check if we should retry based on status code
-                    if retry_config.should_retry_status(status) && attempt < retry_config.max_retries {
-                        last_error = Some(CallerError::HttpError(format!(
-                            "HTTP {} - Retrying (attempt {}/{})",
-                            status, attempt + 1, retry_config.max_retries
-                        )));
-                        attempt += 1;
-                        continue;
-                    }
-
-                    let result = response.text().await?;
-                    return ApiResult::build(result, status_code);
-                }
-                Err(e) => {
-                    // Check if we should retry on network error
-                    if retry_config.retry_on_network_error && attempt < retry_config.max_retries {
-                        last_error = Some(CallerError::from(e));
-                        attempt += 1;
-                        continue;
-                    }
-                    return Err(CallerError::from(e));
-                }
-            }
-        }
-
-        // All retries exhausted
-        Err(last_error.unwrap_or_else(|| {
-            CallerError::HttpError("All retry attempts exhausted".to_string())
-        }))
-    }
-
-    pub async fn download(
-        method: &str,
-        params: Option<HashMap<String, String>>,
-        extension: Option<String>,
-    ) -> Result<DownloadResult, CallerError> {
-        let context = CallerContext::build(method, params)?;
-        
-        // Get timeout from API config or use default
-        let timeout_ms = context.api_item.timeout.unwrap_or(DEFAULT_TIMEOUT_MS as u32);
-        let timeout = Duration::from_millis(timeout_ms as u64);
-        
-        // Clone http_method before using it
-        let http_method = context.http_method.clone();
-        let url = context.url.clone();
-        
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| CallerError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-
-        let mut rb = client
-            .request(http_method, &url)
-            .header(header::USER_AGENT, constants::UA);
-
-        if let Some(params_map) = &context.params {
-            // Parse parameter types (supports single type like "path" or combined like "path,json")
-            let param_type_lower = context.api_item.param_type.to_lowercase();
-            let param_types: Vec<&str> = param_type_lower.split(',').collect();
-
-            // Handle each parameter type
-            for param_type in param_types {
-                match param_type.trim() {
-                    "query" => rb = rb.query(params_map),
-                    "json" => rb = rb.json(params_map),
-                    "form" => rb = rb.form(params_map),
-                    "path" => {
-                        // Path parameters were already substituted in URL construction
-                        // No additional processing needed for request body
-                    }
-                    "none" => {
-                        // No parameters needed for the request body
-                    }
-                    unsupported => {
-                        return Err(CallerError::parameter_error(format!(
-                            "Unsupported parameter type: {}",
-                            unsupported
-                        )));
-                    }
-                }
-            }
-        }
-
-        // Apply authentication
-        rb = context.apply_auth(rb).await?;
-
-        let response = rb.send().await?;
-        let status_code = response.status();
-        
-        // Get content type from response headers before consuming the response
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        // Extract Content-Disposition header before consuming the response
-        let content_disposition = response
-            .headers()
-            .get(header::CONTENT_DISPOSITION)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let content = response.bytes().await?.to_vec();
-
-        let mut download_result = DownloadResult::from_response(status_code, content, content_type)?;
-
-        // Override extension if manually specified
-        if let Some(ext) = extension {
-            download_result = download_result.with_extension(&ext);
-        }
-
-        // Try to extract filename from Content-Disposition header
-        if let Some(disposition) = content_disposition
-            && let Some(filename) = extract_filename_from_disposition(&disposition)
-        {
-            download_result = download_result.with_filename(filename);
-        }
-
-        Ok(download_result)
-    }
-}
 
 pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
     if !method.contains('.') {
@@ -368,7 +8,7 @@ pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
 
     if method.starts_with('.') || method.ends_with('.') {
         return Err(CallerError::invalid_method_format(format!(
-            "Method cannot start or end with dot: '{}'",
+            "method cannot start or end with dot: '{}'",
             method
         )));
     }
@@ -378,7 +18,7 @@ pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
 
     if result.len() != 2 {
         return Err(CallerError::invalid_method_format(format!(
-            "Method must be in format 'service.api', got: '{}'",
+            "method must be in format 'service.api', got: '{}'",
             method
         )));
     }
@@ -398,82 +38,6 @@ pub(crate) fn split_method(method: &str) -> Result<Vec<String>, CallerError> {
     Ok(result)
 }
 
-/// Extract filename from Content-Disposition header
-/// Supports both "inline" and "attachment" disposition types
-/// Handles both "filename=" and "filename*=" parameters
-fn extract_filename_from_disposition(disposition: &str) -> Option<String> {
-    // Try to extract filename from "filename=" parameter
-    if let Some(start) = disposition.find("filename=") {
-        let rest = &disposition[start + 9..];
-        
-        // Filename can be in quotes
-        if let Some(stripped) = rest.strip_prefix('"') {
-            if let Some(end) = stripped.find('"') {
-                return Some(stripped[..end].to_string());
-            }
-        } else {
-            // Filename without quotes - extract until semicolon or end
-            let end = rest.find(';').unwrap_or(rest.len());
-            let filename = rest[..end].trim();
-            return Some(filename.to_string());
-        }
-    }
-
-    // Try to extract from "filename*=" parameter (RFC 5987 encoding)
-    if let Some(start) = disposition.find("filename*=") {
-        let rest = &disposition[start + 10..];
-        
-        // Remove charset and encoding if present (e.g., "UTF-8''")
-        if let Some(prefix_end) = rest.find("'")
-            && let Some(encoding_end) = rest[prefix_end + 1..].find("'")
-        {
-            let encoded = &rest[prefix_end + encoding_end + 2..];
-            
-            // Decode percent-encoded characters
-            if let Ok(decoded) = percent_decode(encoded) {
-                return Some(decoded);
-            }
-        }
-    }
-
-    None
-}
-
-/// Decode percent-encoded string (URL encoding)
-fn percent_decode(s: &str) -> Result<String, std::string::FromUtf8Error> {
-    let mut bytes = Vec::new();
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    
-    while i < chars.len() {
-        if chars[i] == '%' && i + 2 < chars.len() {
-            let hex = format!("{}{}", chars[i + 1], chars[i + 2]);
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                bytes.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        bytes.push(chars[i] as u8);
-        i += 1;
-    }
-    
-    String::from_utf8(bytes)
-}
-
-pub fn get_http_method(http_method: &str) -> Result<Method, CallerError> {
-    match http_method.to_lowercase().as_str() {
-        "get" => Ok(Method::GET),
-        "post" => Ok(Method::POST),
-        "put" => Ok(Method::PUT),
-        "delete" => Ok(Method::DELETE),
-        "patch" => Ok(Method::PATCH),
-        _ => Err(CallerError::http_method_not_supported(
-            http_method.to_string(),
-        )),
-    }
-}
-
 pub(crate) fn validate_path_parameters(
     url: &str,
     provided_params: Vec<&str>,
@@ -488,14 +52,13 @@ pub(crate) fn validate_path_parameters(
                 in_param = true;
                 current_param.clear();
             }
-            '}' => {
-                if in_param {
-                    if !current_param.is_empty() {
-                        required_params.push(current_param.clone());
-                    }
-                    in_param = false;
+            '}' if in_param => {
+                if !current_param.is_empty() {
+                    required_params.push(current_param.clone());
                 }
+                in_param = false;
             }
+            '}' => {}
             _ if in_param => current_param.push(c),
             _ => (),
         }
@@ -554,4 +117,62 @@ pub(crate) fn substitute_path_parameters(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::config_loader::{ConfigLoader, TEST_STATE_LOCK};
+    use crate::domain::{
+        api_config::ApiConfig, caller_config::CallerConfig, service_config::ServiceConfig,
+    };
+
+    fn test_config_with_auth(auth_type: &str) -> CallerConfig {
+        CallerConfig {
+            authorizations: vec![],
+            service_items: vec![ServiceConfig {
+                api_name: "AuthService".to_string(),
+                authorization_type: Some(auth_type.to_string()),
+                base_url: "http://127.0.0.1:9".to_string(),
+                timeout: Some(50),
+                api_items: vec![ApiConfig {
+                    method: "list".to_string(),
+                    url: "/items".to_string(),
+                    http_method: "GET".to_string(),
+                    param_type: "none".to_string(),
+                    description: None,
+                    need_cache: None,
+                    cache_time: None,
+                    content_type: None,
+                    authorization_type: None,
+                    timeout: None,
+                    use_new_http_client: None,
+                }],
+                use_new_http_client: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn test_missing_auth_provider_returns_error() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        ConfigLoader::reset_state_for_test();
+        crate::clear_auth().unwrap();
+        ConfigLoader::init_with_config(test_config_with_auth("missing_provider"));
+
+        let err = crate::call("AuthService.list", None)
+            .await
+            .expect_err("missing auth provider should fail");
+
+        match err {
+            CallerError::UnknownAuthProvider { name } => {
+                assert_eq!(name, "missing_provider");
+            }
+            other => panic!("expected UnknownAuthProvider, got {other:?}"),
+        }
+
+        ConfigLoader::reset_state_for_test();
+        crate::clear_auth().unwrap();
+    }
 }

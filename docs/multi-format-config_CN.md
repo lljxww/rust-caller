@@ -1,67 +1,75 @@
-[English](multi-format-config_EN.md) | 简体中文
-
 # 多格式配置文件支持
 
-`rust-caller` 现在支持多种配置文件格式，包括 JSON、YAML 和 TOML。
+`caller` 支持三种配置文件格式：
 
-## 支持的格式
+- JSON: `.json`
+- YAML: `.yaml` / `.yml`
+- TOML: `.toml`
 
-- **JSON** (`.json`)
-- **YAML** (`.yaml`, `.yml`)
-- **TOML** (`.toml`)
+这三种格式在语义上等价，都会解析成同一个 `CallerConfig` 结构。
 
-## 使用方法
+## 加载方式
 
-### 自动检测格式
-
-配置加载器会根据文件扩展名自动检测格式：
+### 按扩展名自动识别
 
 ```rust
-use caller::config::config_loader::ConfigLoader;
+use caller::ConfigLoader;
 
-// 根据扩展名自动检测
-let config = ConfigLoader::load_config_from_path("config.json")?;
-let config = ConfigLoader::load_config_from_path("config.yaml")?;
-let config = ConfigLoader::load_config_from_path("config.toml")?;
+let json = ConfigLoader::load_config_from_path("config.json")?;
+let yaml = ConfigLoader::load_config_from_path("config.yaml")?;
+let toml = ConfigLoader::load_config_from_path("config.toml")?;
 ```
 
 ### 显式指定格式
 
-你也可以显式指定配置文件格式：
+当文件扩展名不可靠时，可以强制指定：
 
 ```rust
-use caller::config::config_loader::{ConfigFormat, ConfigLoader};
+use caller::{ConfigFileFormat, ConfigLoader};
 
-// 显式指定格式
 let config = ConfigLoader::load_config_from_path_with_format(
-    "myconfig",
-    ConfigFormat::Yaml
+    "config.data",
+    ConfigFileFormat::Yaml,
 )?;
 ```
 
-## 配置文件示例
+## 默认全局路径
 
-### JSON 配置示例
+需要区分两类入口：
+
+- `ConfigLoader::load_config_from_path(...)` / `Caller::from_path(...)`
+  可以加载任意 `.json` / `.yaml` / `.yml` / `.toml`
+- `init_config()` / `reload_config()` / `watch_config()`
+  当前默认只绑定 `./caller.json`
+
+这意味着：
+
+- 如果你使用全局 API，最稳妥的是保留默认 `caller.json`
+- 如果你使用 YAML/TOML，推荐直接走实例化 `Caller::from_path(...)`
+
+## 配置示例
+
+### JSON
 
 ```json
 {
-  "Authorizations": [
+  "authorizations": [
     {
-      "Name": "BearerAuth",
-      "AuthorizationInfo": "Bearer your-token"
+      "name": "BearerAuth",
+      "authorization_info": "Bearer your-token"
     }
   ],
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "GitHub_API",
-      "BaseUrl": "https://api.github.com",
-      "Timeout": 10000,
-      "ApiItems": [
+      "api_name": "GitHub_API",
+      "base_url": "https://api.github.com",
+      "timeout": 10000,
+      "api_items": [
         {
-          "Method": "get_user",
-          "Url": "/users/{username}",
-          "HttpMethod": "GET",
-          "ParamType": "path"
+          "method": "get_user",
+          "url": "/users/{username}",
+          "http_method": "GET",
+          "param_type": "path"
         }
       ]
     }
@@ -69,112 +77,100 @@ let config = ConfigLoader::load_config_from_path_with_format(
 }
 ```
 
-### YAML 配置示例
+### YAML
 
 ```yaml
-Authorizations:
-  - Name: BearerAuth
-    AuthorizationInfo: Bearer your-token
+authorizations:
+  - name: BearerAuth
+    authorization_info: Bearer your-token
 
-ServiceItems:
-  - ApiName: GitHub_API
-    BaseUrl: https://api.github.com
-    Timeout: 10000
-    ApiItems:
-      - Method: get_user
-        Url: /users/{username}
-        HttpMethod: GET
-        ParamType: path
+service_items:
+  - api_name: GitHub_API
+    base_url: https://api.github.com
+    timeout: 10000
+    api_items:
+      - method: get_user
+        url: /users/{username}
+        http_method: GET
+        param_type: path
 ```
 
-### TOML 配置示例
+### TOML
 
 ```toml
-[[Authorizations]]
-Name = "BearerAuth"
-AuthorizationInfo = "Bearer your-token"
+[[authorizations]]
+name = "BearerAuth"
+authorization_info = "Bearer your-token"
 
-[[ServiceItems]]
-ApiName = "GitHub_API"
-BaseUrl = "https://api.github.com"
-Timeout = 10000
+[[service_items]]
+api_name = "GitHub_API"
+base_url = "https://api.github.com"
+timeout = 10000
 
-[[ServiceItems.ApiItems]]
-Method = "get_user"
-Url = "/users/{username}"
-HttpMethod = "GET"
-ParamType = "path"
+[[service_items.api_items]]
+method = "get_user"
+url = "/users/{username}"
+http_method = "GET"
+param_type = "path"
 ```
 
-## 注意事项
+## 字段命名规则
 
-1. **字段名格式**：所有配置文件中的字段名必须使用 PascalCase 格式（例如：`Authorizations`、`ServiceItems`、`ApiName`），以匹配 Rust 结构体的 `serde` 重命名配置。
+所有格式统一使用 `snake_case` 字段名，例如：
 
-2. **配置文件位置**：默认配置文件路径是 `./caller.json`，但你可以通过 `load_config_from_path` 方法加载任意位置的配置文件。
+- `service_items`
+- `api_name`
+- `http_method`
+- `authorization_type`
 
-3. **格式选择建议**：
-   - JSON：适用于需要与其他工具集成的场景
-   - YAML：更易读，适合手动编辑
-   - TOML：Rust 生态推荐格式，语法简洁
+## 校验行为
 
-4. **错误处理**：如果配置文件格式不正确或包含不支持的扩展名，会返回 `CallerError::ConfigError`。
+配置不只是“能解析”就算通过；当前加载阶段还会做一轮基础语义校验。
 
-## 配置文件格式转换
+已经前移到加载阶段的错误包括：
 
-`rust-caller` 提供了内置的配置文件格式转换功能，可以在不同格式之间轻松转换。
+- 非法 `http_method`
+- 非法 `param_type`
+- `none,json` 这类非法组合
+- service / api 重名冲突
 
-### 自动检测转换
+因此，多格式支持不只是序列化层兼容，也共享同一套配置校验逻辑。
 
-根据输出文件的扩展名自动检测目标格式：
+## 格式转换
+
+### 自动按输出扩展名转换
 
 ```rust
-use caller::config::config_loader::ConfigLoader;
+use caller::ConfigLoader;
 
-// JSON 转换为 YAML
 ConfigLoader::convert_config("config.json", "config.yaml")?;
-
-// YAML 转换为 TOML
 ConfigLoader::convert_config("config.yaml", "config.toml")?;
-
-// TOML 转换为 JSON
 ConfigLoader::convert_config("config.toml", "config.json")?;
 ```
 
-### 显式指定格式
-
-也可以显式指定输出格式，忽略文件扩展名：
+### 显式指定输出格式
 
 ```rust
-use caller::config::config_loader::{ConfigLoader, ConfigFormat};
+use caller::{ConfigFileFormat, ConfigLoader};
 
-// 强制输出为 YAML 格式，无论文件扩展名是什么
 ConfigLoader::convert_config_with_format(
     "config.json",
     "my_config.txt",
-    ConfigFormat::Yaml
+    ConfigFileFormat::Yaml,
 )?;
 ```
 
-### 使用场景
+## 什么时候选哪种格式
 
-配置文件转换功能在以下场景中特别有用：
+- JSON: 适合工具链集成、机器生成、和其他系统共享
+- YAML: 更适合人工维护和审阅
+- TOML: 更贴近 Rust 生态，适合和 `Cargo.toml` 风格统一
 
-1. **团队协作**：不同团队成员可能偏好不同的配置格式，使用转换功能可以轻松适配
-2. **系统集成**：将配置转换为与其他工具兼容的格式
-3. **配置迁移**：从一个迁移工具切换到另一个时，批量转换配置文件
-4. **格式统一**：将现有的各种格式配置统一为一种标准格式
+## 参考示例
 
-### 数据完整性保证
+仓库内现成示例位于 `samples/`：
 
-转换过程会：
-- 保留所有配置字段和数据
-- 保持字段名格式（PascalCase）
-- 验证输出文件的有效性
-- 支持格式化输出（JSON 和 TOML 使用美化格式）
-
-## 完整示例
-
-参见 `samples/` 目录中的完整配置文件示例：
 - `samples/api_config_example.json`
 - `samples/api_config_example.yaml`
 - `samples/api_config_example.toml`
+- `samples/minimal_config_example.json`

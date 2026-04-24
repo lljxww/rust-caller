@@ -213,13 +213,13 @@ cp samples/ecommerce_config_example.json caller.json
 A: 首先检查 `caller.json` 配置文件是否正确，然后查看具体的错误信息。
 
 ### Q: 如何添加自己的 API？
-A: 在 `caller.json` 添加新的 ServiceItems 和对应的 ApiItems。
+A: 在 `caller.json` 添加新的 service_items 和对应的 api_items。
 
 ### Q: 如何调试网络问题？
 A: 查看 `ApiResult.raw` 字段获取原始响应，检查网络连接和 API 端点是否可达。
 
 ### Q: 如何处理认证失败？
-A: 检查 Authorizations 配置，确保 Token 和认证类型正确。
+A: 检查 authorizations 配置，确保 Token 和认证类型正确。
 
 ## 贡献
 

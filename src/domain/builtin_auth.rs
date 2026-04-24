@@ -1,5 +1,5 @@
 //! Built-in authentication implementations
-//! 
+//!
 //! This module provides ready-to-use authentication implementations for common scenarios:
 //! - Bearer token authentication
 //! - Basic authentication
@@ -31,7 +31,10 @@ impl BearerAuth {
     /// Create from environment variable
     pub fn from_env(var_name: &str) -> Result<Self, CallerError> {
         let token = std::env::var(var_name).map_err(|_| {
-            CallerError::AuthenticationError(format!("Environment variable '{}' not found", var_name))
+            CallerError::AuthenticationError(format!(
+                "Environment variable '{}' not found",
+                var_name
+            ))
         })?;
         Ok(Self { token })
     }
@@ -80,9 +83,7 @@ impl DynamicBearerAuth {
 
     /// Create from shared mutable state (for token refresh)
     pub fn from_shared(token: Arc<RwLock<String>>) -> Self {
-        Self::new(move || {
-            token.read().map(|t| t.clone()).unwrap_or_default()
-        })
+        Self::new(move || token.read().map(|t| t.clone()).unwrap_or_default())
     }
 }
 
@@ -116,10 +117,16 @@ impl BasicAuth {
 
     pub fn from_env(user_var: &str, pass_var: &str) -> Result<Self, CallerError> {
         let username = std::env::var(user_var).map_err(|_| {
-            CallerError::AuthenticationError(format!("Environment variable '{}' not found", user_var))
+            CallerError::AuthenticationError(format!(
+                "Environment variable '{}' not found",
+                user_var
+            ))
         })?;
         let password = std::env::var(pass_var).map_err(|_| {
-            CallerError::AuthenticationError(format!("Environment variable '{}' not found", pass_var))
+            CallerError::AuthenticationError(format!(
+                "Environment variable '{}' not found",
+                pass_var
+            ))
         })?;
         Ok(Self { username, password })
     }
@@ -154,12 +161,18 @@ pub struct ApiKeyAuth {
 
 impl ApiKeyAuth {
     pub fn new(header_name: String, api_key: String) -> Self {
-        Self { header_name, api_key }
+        Self {
+            header_name,
+            api_key,
+        }
     }
 
     pub fn from_env(header_name: &str, var_name: &str) -> Result<Self, CallerError> {
         let api_key = std::env::var(var_name).map_err(|_| {
-            CallerError::AuthenticationError(format!("Environment variable '{}' not found", var_name))
+            CallerError::AuthenticationError(format!(
+                "Environment variable '{}' not found",
+                var_name
+            ))
         })?;
         Ok(Self {
             header_name: header_name.to_string(),
@@ -202,7 +215,9 @@ impl DynamicApiKeyAuth {
 
     pub fn from_env(header_name: &str, var_name: &str) -> Self {
         let var_name = var_name.to_string();
-        Self::new(header_name, move || std::env::var(&var_name).unwrap_or_default())
+        Self::new(header_name, move || {
+            std::env::var(&var_name).unwrap_or_default()
+        })
     }
 
     pub fn from_shared(header_name: &str, key: Arc<RwLock<String>>) -> Self {
@@ -245,7 +260,10 @@ impl OAuth2Auth {
 
     pub fn from_env(var_name: &str) -> Result<Self, CallerError> {
         let token = std::env::var(var_name).map_err(|_| {
-            CallerError::AuthenticationError(format!("Environment variable '{}' not found", var_name))
+            CallerError::AuthenticationError(format!(
+                "Environment variable '{}' not found",
+                var_name
+            ))
         })?;
         Ok(Self::new(token))
     }
@@ -267,7 +285,7 @@ impl Authenticator for OAuth2Auth {
         _context: &AuthContext,
     ) -> Result<RequestBuilder, CallerError> {
         let header_value = format!("{} {}", self.prefix, self.token);
-        Ok(builder.header("Authorization", header_value))
+        Ok(builder.header("AuthConfig", header_value))
     }
 }
 
@@ -283,7 +301,9 @@ pub struct CustomHeaderAuth {
 
 impl CustomHeaderAuth {
     pub fn new() -> Self {
-        Self { headers: Vec::new() }
+        Self {
+            headers: Vec::new(),
+        }
     }
 
     pub fn add_header(&mut self, name: impl Into<String>, value: impl Into<String>) {
@@ -325,9 +345,7 @@ impl DynamicHeaderAuth {
     }
 
     pub fn from_shared(headers: Arc<RwLock<Vec<(String, String)>>>) -> Self {
-        Self::new(move || {
-            headers.read().map(|h| h.clone()).unwrap_or_default()
-        })
+        Self::new(move || headers.read().map(|h| h.clone()).unwrap_or_default())
     }
 }
 
@@ -417,7 +435,7 @@ mod tests {
     fn test_dynamic_bearer_from_shared() {
         let token = Arc::new(RwLock::new("initial".to_string()));
         let auth = DynamicBearerAuth::from_shared(token.clone());
-        
+
         // Update token
         *token.write().unwrap() = "updated".to_string();
         // Token will be "updated" on next request

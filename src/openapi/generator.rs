@@ -1,8 +1,11 @@
 //! OpenAPI generator from Caller configuration
 
 use super::types::*;
+use crate::client::Caller;
 use crate::config::config_loader::ConfigLoader;
-use crate::domain::{api_item::ApiItem, caller_config::CallerConfig, service_item::ServiceItem};
+use crate::domain::{
+    ParamType, api_config::ApiConfig, caller_config::CallerConfig, service_config::ServiceConfig,
+};
 use crate::shared::error::CallerError;
 use std::collections::HashMap;
 
@@ -19,24 +22,7 @@ pub struct OpenApiGenerator {
 }
 
 impl OpenApiGenerator {
-    /// Create a new OpenAPI generator from Caller configuration
-    /// 
-    /// # Arguments
-    /// * `config` - CallerConfig instance containing API definitions
-    /// 
-    /// # Returns
-    /// A new OpenApiGenerator instance with default settings
-    /// 
-    /// # Example
-    /// ```
-    /// use caller::{OpenApiGenerator, CallerConfig};
-    /// 
-    /// let config = CallerConfig {
-    ///     authorizations: vec![],
-    ///     service_items: vec![],
-    /// };
-    /// let generator = OpenApiGenerator::new(config);
-    /// ```
+    /// Create a new generator from loaded configuration
     pub fn new(config: CallerConfig) -> Self {
         Self {
             config,
@@ -48,127 +34,49 @@ impl OpenApiGenerator {
         }
     }
 
-    /// Create generator from currently loaded configuration file
-    /// 
-    /// This is a convenience method that loads the configuration
-    /// that was previously loaded via ConfigLoader.
-    /// 
-    /// # Returns
-    /// Ok(OpenApiGenerator) if config is loaded, Err otherwise
-    /// 
-    /// # Errors
-    /// Returns CallerError if configuration is not loaded
+    /// Create generator from configuration file
     pub fn from_config_file() -> Result<Self, CallerError> {
         let config = ConfigLoader::get_full_config()?;
         Ok(Self::new(config))
     }
 
-    /// Set the API title for OpenAPI documentation
-    /// 
-    /// # Arguments
-    /// * `title` - API title
-    /// 
-    /// # Returns
-    /// Self for method chaining
-    /// 
-    /// # Example
-    /// ```
-    /// use caller::{OpenApiGenerator, CallerConfig};
-    /// 
-    /// let generator = OpenApiGenerator::new(CallerConfig {
-    ///     authorizations: vec![],
-    ///     service_items: vec![],
-    /// })
-    /// .title("My REST API");
-    /// ```
+    /// Create generator from a [`Caller`] instance.
+    pub fn from_caller(caller: &Caller) -> Result<Self, CallerError> {
+        Ok(Self::new(caller.config()?))
+    }
+
+    /// Set API title
     pub fn title(mut self, title: &str) -> Self {
         self.title = title.to_string();
         self
     }
 
-    /// Set the API version for OpenAPI documentation
-    /// 
-    /// # Arguments
-    /// * `version` - API version string (e.g., "1.0.0")
-    /// 
-    /// # Returns
-    /// Self for method chaining
+    /// Set API version
     pub fn version(mut self, version: &str) -> Self {
         self.version = version.to_string();
         self
     }
 
-    /// Set the API description for OpenAPI documentation
-    /// 
-    /// # Arguments
-    /// * `description` - API description text
-    /// 
-    /// # Returns
-    /// Self for method chaining
+    /// Set API description
     pub fn description(mut self, description: &str) -> Self {
         self.description = Some(description.to_string());
         self
     }
 
-    /// Enable or disable proxy mode
-    /// 
-    /// When enabled, all API paths in the OpenAPI spec will route through
-    /// the caller proxy server. This allows Swagger UI "Try it out" to work
-    /// through the caller, enabling authentication and other features.
-    /// 
-    /// # Arguments
-    /// * `enabled` - Whether to enable proxy mode
-    /// 
-    /// # Returns
-    /// Self for method chaining
-    /// 
-    /// # Example
-    /// ```
-    /// use caller::{OpenApiGenerator, CallerConfig};
-    /// 
-    /// let generator = OpenApiGenerator::new(CallerConfig {
-    ///     authorizations: vec![],
-    ///     service_items: vec![],
-    /// })
-    /// .proxy_mode(true)
-    /// .proxy_url("http://localhost:8080");
-    /// ```
+    /// Enable proxy mode - all requests go through caller proxy
+    /// This allows Swagger UI "Try it out" to work through caller
     pub fn proxy_mode(mut self, enabled: bool) -> Self {
         self.proxy_mode = enabled;
         self
     }
 
-    /// Set the proxy server URL for proxy mode
-    /// 
-    /// # Arguments
-    /// * `url` - Proxy server base URL
-    /// 
-    /// # Returns
-    /// Self for method chaining
+    /// Set proxy server URL
     pub fn proxy_url(mut self, url: &str) -> Self {
         self.proxy_url = url.to_string();
         self
     }
 
-    /// Generate the complete OpenAPI 3.0.3 document
-    /// 
-    /// This method processes all services and API items from the configuration
-    /// and creates a complete OpenAPI specification.
-    /// 
-    /// # Returns
-    /// An OpenApiDoc containing the complete OpenAPI specification
-    /// 
-    /// # Example
-    /// ```
-    /// use caller::{OpenApiGenerator, CallerConfig};
-    /// 
-    /// let config = CallerConfig {
-    ///     authorizations: vec![],
-    ///     service_items: vec![],
-    /// };
-    /// let doc = OpenApiGenerator::new(config).generate();
-    /// assert_eq!(doc.openapi, "3.0.3");
-    /// ```
+    /// Generate OpenAPI document
     pub fn generate(&self) -> OpenApiDoc {
         let mut paths = HashMap::new();
         let mut servers = Vec::new();
@@ -203,14 +111,14 @@ impl OpenApiGenerator {
             });
 
             // Process API items
-            for api_item in &service.api_items {
+            for api_config in &service.api_items {
                 let path = if self.proxy_mode {
                     // In proxy mode, generate proxy paths
-                    format!("/proxy/{}/{}", service.api_name, api_item.method)
+                    format!("/proxy/{}/{}", service.api_name, api_config.method)
                 } else {
-                    self.normalize_path(&api_item.url)
+                    self.normalize_path(&api_config.url)
                 };
-                let operation = self.create_operation(service, api_item);
+                let operation = self.create_operation(service, api_config);
 
                 // Get or create path item
                 let path_item = paths.entry(path.clone()).or_insert_with(|| PathItem {
@@ -226,13 +134,15 @@ impl OpenApiGenerator {
                 });
 
                 // Add operation to path item based on HTTP method
-                match api_item.http_method.to_lowercase().as_str() {
-                    "get" => path_item.get = Some(operation),
-                    "post" => path_item.post = Some(operation),
-                    "put" => path_item.put = Some(operation),
-                    "delete" => path_item.delete = Some(operation),
-                    "patch" => path_item.patch = Some(operation),
-                    _ => {}
+                if let Ok(http_method) = api_config.http_method() {
+                    match http_method.as_openapi_key() {
+                        "get" => path_item.get = Some(operation),
+                        "post" => path_item.post = Some(operation),
+                        "put" => path_item.put = Some(operation),
+                        "delete" => path_item.delete = Some(operation),
+                        "patch" => path_item.patch = Some(operation),
+                        _ => {}
+                    }
                 }
             }
 
@@ -278,16 +188,15 @@ impl OpenApiGenerator {
     }
 
     /// Create OpenAPI operation from API item
-    fn create_operation(&self, service: &ServiceItem, api_item: &ApiItem) -> Operation {
+    fn create_operation(&self, service: &ServiceConfig, api_config: &ApiConfig) -> Operation {
         let mut parameters = Vec::new();
         let mut request_body = None;
 
         // Parse parameter types
-        let param_type_lower = api_item.param_type.to_lowercase();
-        let param_types: Vec<&str> = param_type_lower.split(',').collect();
+        let param_types = api_config.param_types().unwrap_or_default();
 
         // Extract path parameters from URL
-        let path_params = self.extract_path_params(&api_item.url);
+        let path_params = self.extract_path_params(&api_config.url);
         for param in path_params {
             parameters.push(Parameter {
                 name: param.clone(),
@@ -300,7 +209,7 @@ impl OpenApiGenerator {
         }
 
         // Add query parameters if query type
-        if param_types.contains(&"query") {
+        if param_types.contains(&ParamType::Query) {
             // Generic query parameter support
             parameters.push(Parameter {
                 name: "params".to_string(),
@@ -313,7 +222,7 @@ impl OpenApiGenerator {
         }
 
         // Add request body if json or form type
-        if param_types.contains(&"json") {
+        if param_types.contains(&ParamType::Json) {
             request_body = Some(RequestBody {
                 description: Some("Request body".to_string()),
                 content: HashMap::from([(
@@ -326,7 +235,7 @@ impl OpenApiGenerator {
                 )]),
                 required: Some(true),
             });
-        } else if param_types.contains(&"form") {
+        } else if param_types.contains(&ParamType::Form) {
             request_body = Some(RequestBody {
                 description: Some("Form data".to_string()),
                 content: HashMap::from([(
@@ -342,7 +251,7 @@ impl OpenApiGenerator {
         }
 
         // Determine auth type (API item takes precedence over service)
-        let auth_type = api_item
+        let auth_type = api_config
             .authorization_type
             .as_ref()
             .or(service.authorization_type.as_ref());
@@ -371,9 +280,9 @@ impl OpenApiGenerator {
         )]);
 
         Operation {
-            summary: api_item.description.clone(),
-            description: api_item.description.clone(),
-            operation_id: Some(format!("{}_{}", service.api_name, api_item.method)),
+            summary: api_config.description.clone(),
+            description: api_config.description.clone(),
+            operation_id: Some(format!("{}_{}", service.api_name, api_config.method)),
             tags: vec![service.api_name.clone()],
             parameters,
             request_body,
@@ -409,50 +318,14 @@ impl OpenApiGenerator {
         params
     }
 
-    /// Generate OpenAPI specification as JSON string
-    /// 
-    /// This method generates the complete OpenAPI document and serializes
-    /// it to a pretty-printed JSON string suitable for writing to a file.
-    /// 
-    /// # Returns
-    /// Ok(JSON string) if successful, Err if serialization fails
-    /// 
-    /// # Example
-    /// ```
-    /// use caller::{OpenApiGenerator, CallerConfig};
-    /// 
-    /// let config = CallerConfig {
-    ///     authorizations: vec![],
-    ///     service_items: vec![],
-    /// };
-    /// let json = OpenApiGenerator::new(config).to_json().unwrap();
-    /// assert!(json.contains("\"openapi\""));
-    /// ```
+    /// Generate OpenAPI JSON string
     pub fn to_json(&self) -> Result<String, CallerError> {
         let doc = self.generate();
         serde_json::to_string_pretty(&doc)
             .map_err(|e| CallerError::JsonError(format!("Failed to serialize OpenAPI: {}", e)))
     }
 
-    /// Generate OpenAPI specification as YAML string
-    /// 
-    /// This method generates the complete OpenAPI document and serializes
-    /// it to a YAML string suitable for writing to a file.
-    /// 
-    /// # Returns
-    /// Ok(YAML string) if successful, Err if serialization fails
-    /// 
-    /// # Example
-    /// ```
-    /// use caller::{OpenApiGenerator, CallerConfig};
-    /// 
-    /// let config = CallerConfig {
-    ///     authorizations: vec![],
-    ///     service_items: vec![],
-    /// };
-    /// let yaml = OpenApiGenerator::new(config).to_yaml().unwrap();
-    /// assert!(yaml.contains("openapi:"));
-    /// ```
+    /// Generate OpenAPI YAML string
     pub fn to_yaml(&self) -> Result<String, CallerError> {
         let doc = self.generate();
         serde_yaml::to_string(&doc)
@@ -463,20 +336,21 @@ impl OpenApiGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::api_item::ApiItem;
+    use crate::client::Caller;
+    use crate::domain::api_config::ApiConfig;
     use crate::domain::caller_config::CallerConfig;
-    use crate::domain::service_item::ServiceItem;
+    use crate::domain::service_config::ServiceConfig;
 
     fn create_test_config() -> CallerConfig {
         CallerConfig {
             authorizations: vec![],
-            service_items: vec![ServiceItem {
+            service_items: vec![ServiceConfig {
                 api_name: "test".to_string(),
                 authorization_type: None,
                 base_url: "https://api.example.com".to_string(),
                 timeout: None,
                 api_items: vec![
-                    ApiItem {
+                    ApiConfig {
                         method: "list".to_string(),
                         url: "/items".to_string(),
                         http_method: "GET".to_string(),
@@ -489,7 +363,7 @@ mod tests {
                         timeout: None,
                         use_new_http_client: None,
                     },
-                    ApiItem {
+                    ApiConfig {
                         method: "get".to_string(),
                         url: "/items/{id}".to_string(),
                         http_method: "GET".to_string(),
@@ -502,7 +376,7 @@ mod tests {
                         timeout: None,
                         use_new_http_client: None,
                     },
-                    ApiItem {
+                    ApiConfig {
                         method: "create".to_string(),
                         url: "/items".to_string(),
                         http_method: "POST".to_string(),
@@ -557,5 +431,15 @@ mod tests {
 
         let params = generator.extract_path_params("/items");
         assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_from_caller() {
+        let caller = Caller::from_config(create_test_config()).unwrap();
+        let generator = OpenApiGenerator::from_caller(&caller).unwrap();
+        let doc = generator.generate();
+
+        assert_eq!(doc.info.title, "Caller API");
+        assert!(!doc.paths.is_empty());
     }
 }

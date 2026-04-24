@@ -6,25 +6,24 @@ use std::sync::Arc;
 use crate::shared::error::CallerError;
 
 /// Authentication trait that users can implement for custom authentication
-/// 
+///
 /// # Example
 /// ```rust
-/// use caller::domain::auth_trait::Authenticator;
-/// use caller::domain::auth_trait::AuthContext;
+/// use caller::{AuthContext, Authenticator};
 /// use reqwest::RequestBuilder;
-/// use caller::shared::error::CallerError;
+/// use caller::CallerError;
 /// use async_trait::async_trait;
-/// 
+///
 /// pub struct BearerAuth {
 ///     token: String,
 /// }
-/// 
+///
 /// impl BearerAuth {
 ///     pub fn new(token: String) -> Self {
 ///         Self { token }
 ///     }
 /// }
-/// 
+///
 /// #[async_trait]
 /// impl Authenticator for BearerAuth {
 ///     async fn authenticate(&self, builder: RequestBuilder, _context: &AuthContext) -> Result<RequestBuilder, CallerError> {
@@ -35,11 +34,11 @@ use crate::shared::error::CallerError;
 #[async_trait]
 pub trait Authenticator: Send + Sync {
     /// Apply authentication to the request builder
-    /// 
+    ///
     /// # Arguments
     /// * `builder` - The request builder to modify
     /// * `context` - Authentication context with request details
-    /// 
+    ///
     /// # Returns
     /// Modified request builder with authentication applied
     async fn authenticate(
@@ -64,7 +63,7 @@ pub struct AuthContext {
     pub http_method: String,
     /// Request parameters
     pub params: Option<HashMap<String, String>>,
-    /// Authorization type name from config
+    /// AuthConfig type name from config
     pub auth_type: String,
 }
 
@@ -91,16 +90,22 @@ impl AuthContext {
 }
 
 /// Custom authentication function type for maximum flexibility
-/// 
+///
 /// This allows users to provide a closure that has full access to modify the request
-/// 
+///
 /// # Arguments
 /// * `builder` - The request builder to modify
 /// * `context` - Authentication context with request details
-/// 
+///
 /// # Returns
 /// Modified request builder or error
-pub type AuthFn = dyn Fn(RequestBuilder, &AuthContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<RequestBuilder, CallerError>> + Send>> + Send + Sync;
+pub type AuthFn = dyn Fn(
+        RequestBuilder,
+        &AuthContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<RequestBuilder, CallerError>> + Send>,
+    > + Send
+    + Sync;
 
 /// Wrapper to support both trait and closure based authentication
 #[derive(Clone)]

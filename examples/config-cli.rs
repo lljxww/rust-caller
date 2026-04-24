@@ -11,9 +11,8 @@
 fn main() {
     println!("🔧 Caller Configuration Manager");
     println!("================================\n");
-    
-    // Use the config CLI module
-    caller::config::config_cli::run_interactive().unwrap_or_else(|e| {
+
+    caller::run_config_cli().unwrap_or_else(|e| {
         eprintln!("❌ Error: {}", e);
         std::process::exit(1);
     });

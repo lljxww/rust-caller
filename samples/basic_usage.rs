@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   原始响应长度: {} 字符", result.raw.len());
 
     // 获取第一个文章的标题
-    if let Some(title) = result.get_as_str("0.title") {
+    if let Some(title) = result.str_at("0.title") {
         println!("   第一个文章标题: {}", title);
     }
     println!();
@@ -32,9 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let result = call("JP.get", Some(path_params)).await?;
 
-    println!("   文章ID: {}", result.get_as_str("id").unwrap_or("N/A"));
-    println!("   文章标题: {}", result.get_as_str("title").unwrap_or("N/A"));
-    println!("   文章内容: {}", result.get_as_str("body").unwrap_or("N/A"));
+    println!("   文章ID: {}", result.str_at("id").unwrap_or("N/A"));
+    println!("   文章标题: {}", result.str_at("title").unwrap_or("N/A"));
+    println!("   文章内容: {}", result.str_at("body").unwrap_or("N/A"));
     println!();
 
     // 示例3: 查询参数调用
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let result = call("JP.filter", Some(query_params)).await?;
 
-    println!("   找到的文章数量: {}", result.get("0").map_or(0, |_| 1));
+    println!("   找到的文章数量: {}", result.value_at("0").map_or(0, |_| 1));
     println!();
 
     // 示例4: JSON 请求体调用
@@ -57,10 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = call("JP.create", Some(json_params)).await?;
 
     println!("   创建状态码: {}", result.status_code);
-    if let Some(new_id) = result.get_as_i64("id") {
+    if let Some(new_id) = result.i64_at("id") {
         println!("   新文章ID: {}", new_id);
     }
-    println!("   文章标题: {}", result.get_as_str("title").unwrap_or("N/A"));
+    println!("   文章标题: {}", result.str_at("title").unwrap_or("N/A"));
     println!();
 
     // 示例5: 多个查询参数
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = call("JP.filter", Some(multi_params)).await?;
 
     println!("   筛选结果: 找到 ID=1 且 userId=1 的文章");
-    println!("   文章标题: {}", result.get_as_str("0.title").unwrap_or("N/A"));
+    println!("   文章标题: {}", result.str_at("0.title").unwrap_or("N/A"));
     println!();
 
     // 示例6: 深度路径访问
@@ -81,11 +81,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let all_posts = call("JP.list", None).await?;
 
     // 访问数组中的嵌套字段
-    if let Some(first_user_id) = all_posts.get_as_i64("0.userId") {
+    if let Some(first_user_id) = all_posts.i64_at("0.userId") {
         println!("    第一篇文章的用户ID: {}", first_user_id);
     }
 
-    if let Some(first_post_title) = all_posts.get_as_str("0.title") {
+    if let Some(first_post_title) = all_posts.str_at("0.title") {
         println!("    第一篇文章标题: {}", first_post_title);
     }
 

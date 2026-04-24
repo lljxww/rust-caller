@@ -9,19 +9,19 @@
     },
     {
       "name": "AlipayAuth",
-      "header_name": "Authorization",
+      "header_name": "AuthConfig",
       "type": "Bearer",
       "token": "${ALIPAY_API_TOKEN}"
     },
     {
       "name": "WeChatAuth",
-      "header_name": "Authorization",
+      "header_name": "AuthConfig",
       "type": "Bearer",
       "token": "${WECHAT_API_TOKEN}"
     },
     {
       "name": "JDAuth",
-      "header_name": "Authorization",
+      "header_name": "AuthConfig",
       "type": "Bearer",
       "token": "${JD_API_TOKEN}"
     }

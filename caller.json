@@ -1,63 +1,63 @@
 {
-    "Authorizations": [],
-    "ServiceItems": [
+    "authorizations": [],
+    "service_items": [
         {
-            "ApiName": "weibo",
-            "BaseUrl": "https://weibo.com/ajax",
-            "ApiItems": [
+            "api_name": "weibo",
+            "base_url": "https://weibo.com/ajax",
+            "api_items": [
                 {
-                    "Method": "hot",
-                    "Url": "/side/hotSearch",
-                    "HttpMethod": "GET",
-                    "ParamType": "query"
+                    "method": "hot",
+                    "url": "/side/hotSearch",
+                    "http_method": "GET",
+                    "param_type": "query"
                 }
             ]
         },
         {
-            "ApiName": "JP",
-            "BaseUrl": "https://jsonplaceholder.typicode.com",
-            "ApiItems": [
+            "api_name": "JP",
+            "base_url": "https://jsonplaceholder.typicode.com",
+            "api_items": [
                 {
-                    "Method": "get",
-                    "Url": "/posts/{post_id}",
-                    "HttpMethod": "GET",
-                    "ParamType": "path"
+                    "method": "get",
+                    "url": "/posts/{post_id}",
+                    "http_method": "GET",
+                    "param_type": "path"
                 },
                 {
-                    "Method": "list",
-                    "Url": "/posts",
-                    "HttpMethod": "GET",
-                    "ParamType": "none"
+                    "method": "list",
+                    "url": "/posts",
+                    "http_method": "GET",
+                    "param_type": "none"
                 },
                 {
-                    "Method": "create",
-                    "Url": "/posts",
-                    "HttpMethod": "POST",
-                    "ParamType": "json"
+                    "method": "create",
+                    "url": "/posts",
+                    "http_method": "POST",
+                    "param_type": "json"
                 },
                 {
-                    "Method": "update",
-                    "Url": "/posts/{post_id}",
-                    "HttpMethod": "PUT",
-                    "ParamType": "path,json"
+                    "method": "update",
+                    "url": "/posts/{post_id}",
+                    "http_method": "PUT",
+                    "param_type": "path,json"
                 },
                 {
-                    "Method": "patch",
-                    "Url": "/posts/{post_id}",
-                    "HttpMethod": "PATCH",
-                    "ParamType": "path,json"
+                    "method": "patch",
+                    "url": "/posts/{post_id}",
+                    "http_method": "PATCH",
+                    "param_type": "path,json"
                 },
                 {
-                    "Method": "delete",
-                    "Url": "/posts/{post_id}",
-                    "HttpMethod": "DELETE",
-                    "ParamType": "path"
+                    "method": "delete",
+                    "url": "/posts/{post_id}",
+                    "http_method": "DELETE",
+                    "param_type": "path"
                 },
                 {
-                    "Method": "filter",
-                    "Url": "/posts",
-                    "HttpMethod": "GET",
-                    "ParamType": "query"
+                    "method": "filter",
+                    "url": "/posts",
+                    "http_method": "GET",
+                    "param_type": "query"
                 }
             ]
         }

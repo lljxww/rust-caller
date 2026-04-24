@@ -2,6 +2,7 @@ use caller::call;
 use std::collections::HashMap;
 
 #[tokio::test]
+#[ignore = "requires external network access"]
 async fn test_call_list_posts() {
     // Test: Get list of all posts
     let result = call("JP.list", None).await;
@@ -19,8 +20,8 @@ async fn test_call_list_posts() {
     );
 
     // Access the first post directly
-    let first_post_id = api_result.get_as_i64("0.id");
-    let first_post_title = api_result.get_as_str("0.title");
+    let first_post_id = api_result.i64_at("0.id");
+    let first_post_title = api_result.str_at("0.title");
 
     assert!(
         first_post_id.is_some() && first_post_id.unwrap() > 0,
@@ -30,6 +31,7 @@ async fn test_call_list_posts() {
 }
 
 #[tokio::test]
+#[ignore = "requires external network access"]
 async fn test_call_get_single_post() {
     // Test: Get single post by ID
     let params = HashMap::from([("post_id".to_string(), "1".to_string())]);
@@ -46,12 +48,13 @@ async fn test_call_get_single_post() {
         println!("...");
     }
 
-    assert_eq!(api_result.get_as_i64("id"), Some(1));
-    assert!(api_result.get_as_str("title").is_some());
-    assert!(api_result.get_as_str("body").is_some());
+    assert_eq!(api_result.i64_at("id"), Some(1));
+    assert!(api_result.str_at("title").is_some());
+    assert!(api_result.str_at("body").is_some());
 }
 
 #[tokio::test]
+#[ignore = "requires external network access"]
 async fn test_call_create_post() {
     // Test: Create a new post
     let params = HashMap::from([
@@ -68,23 +71,21 @@ async fn test_call_create_post() {
     let api_result = result.unwrap();
 
     assert_eq!(api_result.status_code, 201); // Created
+    assert_eq!(api_result.str_at("title"), Some("Test Integration Post"));
     assert_eq!(
-        api_result.get_as_str("title"),
-        Some("Test Integration Post")
-    );
-    assert_eq!(
-        api_result.get_as_str("body"),
+        api_result.str_at("body"),
         Some("This is a test post created through integration")
     );
 
     // Get the created ID
-    let created_id = api_result.get_as_i64("id");
+    let created_id = api_result.i64_at("id");
     assert!(created_id.is_some());
 
     println!("Created post with ID: {:?}", created_id);
 }
 
 #[tokio::test]
+#[ignore = "requires external network access"]
 async fn test_call_filter_posts() {
     // Test: Filter posts by user ID
     let params = HashMap::from([("userId".to_string(), "1".to_string())]);
@@ -96,7 +97,7 @@ async fn test_call_filter_posts() {
     assert!(!api_result.raw.is_empty());
 
     // Check that we got an array response
-    let first_result = api_result.get("0");
+    let first_result = api_result.value_at("0");
     assert!(
         first_result.is_some(),
         "Filter should return at least one result"
@@ -109,6 +110,7 @@ async fn test_call_filter_posts() {
 }
 
 #[tokio::test]
+#[ignore = "requires external network access"]
 async fn test_call_with_query_params() {
     // Test: Multiple query parameters
     let params = HashMap::from([

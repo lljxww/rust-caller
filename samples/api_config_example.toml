@@ -1,50 +1,50 @@
 # 文档说明: 这是一个完整的 API 配置文件示例，展示了 Caller 支持的各种配置选项
 # 支持 TOML 扩展名
-# 注意：字段名需要使用 PascalCase 格式以匹配 Rust 结构体的 serde rename 配置
+# 注意：字段名统一使用 snake_case，以匹配当前配置模型
 
-[[Authorizations]]
-Name = "BearerAuth"
-AuthorizationInfo = "Bearer your-secret-api-token-here"
+[[authorizations]]
+name = "BearerAuth"
+authorization_info = "Bearer your-secret-api-token-here"
 
-[[Authorizations]]
-Name = "ContentTypeAuth"
-AuthorizationInfo = "Content-Type application/json; charset=utf-8"
+[[authorizations]]
+name = "content_typeAuth"
+authorization_info = "Content-Type application/json; charset=utf-8"
 
-[[Authorizations]]
-Name = "CustomHeaderAuth"
-AuthorizationInfo = "X-Custom-Auth custom-auth-value"
+[[authorizations]]
+name = "CustomHeaderAuth"
+authorization_info = "X-Custom-Auth custom-auth-value"
 
 # 服务配置
-[[ServiceItems]]
-ApiName = "GitHub_API"
-BaseUrl = "https://api.github.com"
-Timeout = 10000
+[[service_items]]
+api_name = "GitHub_API"
+base_url = "https://api.github.com"
+timeout = 10000
 
-[[ServiceItems.ApiItems]]
-Method = "get_user"
-Url = "/users/{username}"
-HttpMethod = "GET"
-ParamType = "path"
+[[service_items.api_items]]
+method = "get_user"
+url = "/users/{username}"
+http_method = "GET"
+param_type = "path"
 
-[[ServiceItems.ApiItems]]
-Method = "get_user_repos"
-Url = "/users/{username}/repos"
-HttpMethod = "GET"
-ParamType = "path,query"
+[[service_items.api_items]]
+method = "get_user_repos"
+url = "/users/{username}/repos"
+http_method = "GET"
+param_type = "path,query"
 
-[[ServiceItems.ApiItems]]
-Method = "create_issue"
-Url = "/repos/{owner}/{repo}/issues"
-HttpMethod = "POST"
-ParamType = "path,json"
+[[service_items.api_items]]
+method = "create_issue"
+url = "/repos/{owner}/{repo}/issues"
+http_method = "POST"
+param_type = "path,json"
 
-[[ServiceItems]]
-ApiName = "Weather_API"
-BaseUrl = "https://api.openweathermap.org/data/2.5"
-Timeout = 5000
+[[service_items]]
+api_name = "Weather_API"
+base_url = "https://api.openweathermap.org/data/2.5"
+timeout = 5000
 
-[[ServiceItems.ApiItems]]
-Method = "get_current_weather"
-Url = "/weather"
-HttpMethod = "GET"
-ParamType = "query"
+[[service_items.api_items]]
+method = "get_current_weather"
+url = "/weather"
+http_method = "GET"
+param_type = "query"

@@ -3,7 +3,7 @@
   "authorizations": [
     {
       "name": "BearerAuth",
-      "header_name": "Authorization",
+      "header_name": "AuthConfig",
       "type": "Bearer",
       "token": "your-api-token-here"
     }

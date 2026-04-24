@@ -25,30 +25,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 示例配置文件1 - 开发环境
     let dev_config = r#"
 {
-  "Authorizations": [
+  "authorizations": [
     {
-      "Name": "BearerToken",
-      "HeaderName": "Authorization",
-      "Type": "Bearer",
-      "Token": "dev-secret-token-12345"
+      "name": "BearerToken",
+      "header_name": "authorization",
+      "type": "Bearer",
+      "token": "dev-secret-token-12345"
     }
   ],
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "dev_api",
-      "BaseUrl": "https://jsonplaceholder.typicode.com",
-      "ApiItems": [
+      "api_name": "dev_api",
+      "base_url": "https://jsonplaceholder.typicode.com",
+      "api_items": [
         {
-          "Method": "get_user",
-          "Url": "/users/{user_id}",
-          "HttpMethod": "GET",
-          "ParamType": "path"
+          "method": "get_user",
+          "url": "/users/{user_id}",
+          "http_method": "GET",
+          "param_type": "path"
         },
         {
-          "Method": "get_users",
-          "Url": "/users",
-          "HttpMethod": "GET",
-          "ParamType": "none"
+          "method": "get_users",
+          "url": "/users",
+          "http_method": "GET",
+          "param_type": "none"
         }
       ]
     }
@@ -58,26 +58,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 示例配置文件2 - 生产环境
     let prod_config = r#"
 {
-  "Authorizations": [
+  "authorizations": [
     {
-      "Name": "OAuthToken",
-      "HeaderName": "Authorization",
-      "Type": "Bearer",
-      "Token": "${PROD_API_TOKEN}"
+      "name": "OAuthToken",
+      "header_name": "authorization",
+      "type": "Bearer",
+      "token": "${PROD_API_TOKEN}"
     }
   ],
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "prod_api",
-      "BaseUrl": "https://api.example.com",
-      "ApiItems": [
+      "api_name": "prod_api",
+      "base_url": "https://api.example.com",
+      "api_items": [
         {
-          "Method": "get_user_profile",
-          "Url": "/users/{user_id}/profile",
-          "HttpMethod": "GET",
-          "ParamType": "path",
-          "Timeout": 10000,
-          "NeedCache": true
+          "method": "get_user_profile",
+          "url": "/users/{user_id}/profile",
+          "http_method": "GET",
+          "param_type": "path",
+          "timeout": 10000,
+          "need_cache": true
         }
       ]
     }
@@ -99,16 +99,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: serde_json::Value = serde_json::from_str(&config_content)?;
 
     println!("   📋 配置文件内容分析:");
-    if let Some(services) = config.get("ServiceItems").and_then(|s| s.as_array()) {
+    if let Some(services) = config.get("service_items").and_then(|s| s.as_array()) {
         println!("   - HTTP 服务数量: {}", services.len());
         for service in services {
-            if let Some(name) = service.get("ApiName").and_then(|n| n.as_str()) {
+            if let Some(name) = service.get("api_name").and_then(|n| n.as_str()) {
                 let base_url = service
-                    .get("BaseUrl")
+                    .get("base_url")
                     .and_then(|u| u.as_str())
                     .unwrap_or("N/A");
                 let api_count = service
-                    .get("ApiItems")
+                    .get("api_items")
                     .and_then(|a| a.as_array())
                     .unwrap_or(&vec![])
                     .len();
@@ -120,11 +120,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(auths) = config.get("Authorizations").and_then(|a| a.as_array()) {
+    if let Some(auths) = config.get("authorizations").and_then(|a| a.as_array()) {
         println!("   - 认证配置数量: {}", auths.len());
         for auth in auths {
-            if let Some(name) = auth.get("Name").and_then(|n| n.as_str()) {
-                let auth_type = auth.get("Type").and_then(|t| t.as_str()).unwrap_or("N/A");
+            if let Some(name) = auth.get("name").and_then(|n| n.as_str()) {
+                let auth_type = auth.get("type").and_then(|t| t.as_str()).unwrap_or("N/A");
                 println!("     - 认证名称: {}, 类型: {}", name, auth_type);
             }
         }
@@ -136,22 +136,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     fn validate_config(config: &serde_json::Value) -> Result<(), String> {
         // 检查必需字段
-        let required_fields = ["ServiceItems"];
+        let required_fields = ["service_items"];
         for field in &required_fields {
             if !config.get(field).is_some() {
                 return Err(format!("缺少必需字段: {}", field));
             }
         }
 
-        // 检查 ServiceItems 格式
-        if let Some(services) = config.get("ServiceItems").and_then(|s| s.as_array()) {
+        // 检查 service_items 格式
+        if let Some(services) = config.get("service_items").and_then(|s| s.as_array()) {
             for (index, service) in services.iter().enumerate() {
-                if let Some(api_name) = service.get("ApiName").and_then(|n| n.as_str()) {
+                if let Some(api_name) = service.get("api_name").and_then(|n| n.as_str()) {
                     if api_name.contains(' ') {
                         return Err(format!("服务名不能包含空格: (索引 {})", index));
                     }
                 } else {
-                    return Err(format!("服务缺少 ApiName 字段: (索引 {})", index));
+                    return Err(format!("服务缺少 api_name 字段: (索引 {})", index));
                 }
             }
         }
@@ -187,9 +187,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 示例配置模板
     let template_config = r#"
 {
-  "BaseUrl": "${API_BASE_URL:-https://default.com}",
-  "Token": "${API_TOKEN}",
-  "Timeout": "${REQUEST_TIMEOUT:-5000}"
+  "base_url": "${API_BASE_URL:-https://default.com}",
+  "token": "${API_TOKEN}",
+  "timeout": "${REQUEST_TIMEOUT:-5000}"
 }"#;
 
     println!("   🔧 配置模板示例 (支持环境变量):");
@@ -211,16 +211,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 返回一个测试配置
                 let test_config = r#"
 {
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "test_api",
-      "BaseUrl": "http://localhost:8080/test",
-      "ApiItems": [
+      "api_name": "test_api",
+      "base_url": "http://localhost:8080/test",
+      "api_items": [
         {
-          "Method": "ping",
-          "Url": "/ping",
-          "HttpMethod": "GET",
-          "ParamType": "none"
+          "method": "ping",
+          "url": "/ping",
+          "http_method": "GET",
+          "param_type": "none"
         }
       ]
     }
@@ -242,7 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default();
 
                 let service_count = config_json
-                    .get("ServiceItems")
+                    .get("service_items")
                     .and_then(|s| s.as_array())
                     .map(|arr| arr.len())
                     .unwrap_or(0);
@@ -315,13 +315,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   🔍 配置对比分析:");
 
     let orig_services = original_json
-        .get("ServiceItems")
+        .get("service_items")
         .and_then(|s| s.as_array())
         .unwrap_or(&vec![])
         .len();
 
     let dev_services = dev_json
-        .get("ServiceItems")
+        .get("service_items")
         .and_then(|s| s.as_array())
         .unwrap_or(&vec![])
         .len();

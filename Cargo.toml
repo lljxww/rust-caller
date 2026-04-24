@@ -6,7 +6,11 @@ license-file = "LICENSE"
 description = "A WebApi Caller"
 homepage = "https://github.com/lljxww/rust-caller"
 repository = "https://github.com/lljxww/rust-caller"
+documentation = "https://docs.rs/caller"
 readme = "README.md"
+keywords = ["http", "api", "client", "openapi", "caller"]
+categories = ["api-bindings", "web-programming::http-client", "config"]
+exclude = [".github/", ".vscode/", "docs/", "examples/caller.*", "api_result_test.json"]
 
 [features]
 default = []
@@ -18,7 +22,7 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 thiserror = "1.0"
 notify = { version = "6", features = ["serde"] }
 async-trait = "0.1"

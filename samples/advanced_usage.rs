@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = call("JP.patch", Some(update_params)).await?;
 
     println!("   更新状态码: {}", result.status_code);
-    println!("   更新后的标题: {}", result.get_as_str("title").unwrap_or("N/A"));
+    println!("   更新后的标题: {}", result.str_at("title").unwrap_or("N/A"));
     println!();
 
     // 示例2: 使用 PUT 替换资源
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = call("JP.update", Some(replace_params)).await?;
 
     println!("   替换状态码: {}", result.status_code);
-    println!("   替换后的标题: {}", result.get_as_str("title").unwrap_or("N/A"));
+    println!("   替换后的标题: {}", result.str_at("title").unwrap_or("N/A"));
     println!();
 
     // 示例3: 删除资源 (使用 PATCH，因为配置中定义为 PATCH)
@@ -76,11 +76,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   创建状态码: {}", result.status_code);
 
     // 深度路径访问
-    if let Some(author) = result.get("metadata").and_then(|m| m.get("author")).and_then(|a| a.as_str()) {
+    if let Some(author) = result.value_at("metadata").and_then(|m| m.get("author")).and_then(|a| a.as_str()) {
         println!("   作者: {}", author);
     }
 
-    if let Some(views) = result.get("stats").and_then(|s| s.get("views")).and_then(|v| v.as_i64()) {
+    if let Some(views) = result.value_at("stats").and_then(|s| s.get("views")).and_then(|v| v.as_i64()) {
         println!("   浏览量: {}", views);
     }
     println!();
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]);
         let result = call("JP.filter", Some(batch_params)).await?;
 
-        if let Some(posts) = result.get_as_str("") {
+        if let Some(posts) = result.str_at("") {
             println!("    用户 {} 的文章数量: {}", user_id, posts.chars().filter(|c| *c == '[').count());
             all_posts.push(format!("用户{}的文章: {}", user_id, posts));
         }
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   微博热搜状态码: {}", hot_search_result.status_code);
 
     // 假设返回的数据格式
-    if let Some(raw_data) = hot_search_result.get_as_str("") {
+    if let Some(raw_data) = hot_search_result.str_at("") {
         println!("   热搜数据示例: {}", if raw_data.len() > 100 {
             format!("{}...", &raw_data[..100])
         } else {
@@ -127,8 +127,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 访问前5篇文章
     for i in 0..5 {
-        if let Some(id) = all_posts.get_as_i64(&format!("{}.id", i)) {
-            if let Some(title) = all_posts.get_as_str(&format!("{}.title", i)) {
+        if let Some(id) = all_posts.i64_at(&format!("{}.id", i)) {
+            if let Some(title) = all_posts.str_at(&format!("{}.title", i)) {
                 println!("    文章 {}: {} - {}", i + 1, id, title);
             }
         } else {
@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("8. 内容类型演示:");
     println!("   当前支持的内容类型: application/json");
     println!("   路径参数和JSON参数的组合使用: 通过 config 配置");
-    println!("   认证支持: 通过 Authorizations 节配置");
+    println!("   认证支持: 通过 authorizations 节配置");
     println!();
 
     println!("=== 高级用法示例完成 ===");

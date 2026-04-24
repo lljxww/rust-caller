@@ -1,65 +1,104 @@
-[English](middleware_EN.md) | [简体中文](middleware_CN.md)
+# Middleware 系统
 
-# Middleware System
+`caller` 当前公开了一组 middleware 相关类型，用于描述和组织请求/响应拦截逻辑。
 
-The caller library provides a powerful middleware system that allows you to intercept and modify requests and responses.
+包括：
 
-## Overview
+- `Middleware`
+- `MiddlewareChain`
+- `RequestContext`
+- `ResponseContext`
+- 内置 middleware 类型，如 `HeaderMiddleware`、`LoggingMiddleware`、`UserAgentMiddleware`
 
-Middleware can:
-- Modify requests before they are sent
-- Process responses after they are received
-- Handle errors during request execution
-- Implement cross-cutting concerns like logging, retry, and circuit breaking
+## 当前状态
 
-## Built-in Middleware
+这里最重要的一点是：
+
+**middleware 目前还是独立能力，尚未接入 `Caller` 的真实请求执行链。**
+
+也就是说，当前这些类型更适合：
+
+- 独立测试
+- 作为你自己上层封装的基础设施
+- 预演未来请求管线设计
+
+而不是：
+
+- 直接注册到 `Caller` 后自动对所有请求生效
+
+## 核心概念
+
+### RequestContext
+
+描述一个待发送请求的上下文：
+
+```rust
+use caller::RequestContext;
+use std::collections::HashMap;
+
+let params = HashMap::from([("id".to_string(), "1".to_string())]);
+
+let ctx = RequestContext::new("GET", "https://api.example.com/users")
+    .with_header("Accept", "application/json")
+    .with_params(params)
+    .with_metadata("trace_id", "abc123");
+```
+
+### ResponseContext
+
+描述一个已完成响应的上下文：
+
+```rust
+use caller::{RequestContext, ResponseContext};
+
+let request = RequestContext::new("GET", "https://api.example.com/users");
+let response = ResponseContext::new(200, "{\"ok\":true}".to_string(), request, 42);
+
+assert!(response.is_success());
+```
+
+### Middleware trait
+
+实现这个 trait 后，可以在三个阶段插入逻辑：
+
+- `before_request`
+- `after_response`
+- `on_error`
+
+## 内置 Middleware
 
 ### HeaderMiddleware
 
-Add custom headers to all requests:
-
 ```rust
-use caller::domain::middleware::{HeaderMiddleware, MiddlewareChain, RequestContext};
+use caller::HeaderMiddleware;
 
 let middleware = HeaderMiddleware::new()
-    .with_header("X-API-Key", "secret-key")
-    .with_header("X-Request-Id", "12345");
+    .with_header("X-App", "MyApp")
+    .with_header("X-Request-Source", "integration-test");
 ```
 
 ### LoggingMiddleware
 
-Log requests and responses:
-
 ```rust
-use caller::domain::middleware::LoggingMiddleware;
+use caller::LoggingMiddleware;
 
 let middleware = LoggingMiddleware::new()
     .with_log_request(true)
     .with_log_response(true);
 ```
 
-Output:
-```
-[Request] GET https://api.example.com/users
-[Response] GET https://api.example.com/users - 200 (45ms)
-```
-
 ### UserAgentMiddleware
 
-Add a custom User-Agent header:
-
 ```rust
-use caller::domain::middleware::UserAgentMiddleware;
+use caller::UserAgentMiddleware;
 
 let middleware = UserAgentMiddleware::new("MyApp/1.0");
 ```
 
 ### TimingMiddleware
 
-Add timing/tracing information to requests:
-
 ```rust
-use caller::domain::middleware::TimingMiddleware;
+use caller::TimingMiddleware;
 
 let middleware = TimingMiddleware::new()
     .with_timing_header("x-request-start");
@@ -67,10 +106,10 @@ let middleware = TimingMiddleware::new()
 
 ### RetryMiddleware
 
-Retry failed requests:
+注意：当前 `RetryMiddleware` 主要还是一个可复用的配置/命名单元，真正的网络重试能力目前由 `call_with_retry` / `RetryConfig` 驱动。
 
 ```rust
-use caller::domain::middleware::RetryMiddleware;
+use caller::RetryMiddleware;
 
 let middleware = RetryMiddleware::new()
     .with_max_retries(3)
@@ -79,197 +118,89 @@ let middleware = RetryMiddleware::new()
 
 ### CircuitBreakerMiddleware
 
-Prevent cascading failures by stopping requests to a failing service:
-
 ```rust
-use caller::domain::middleware::{CircuitBreakerMiddleware, CircuitBreakerConfig};
+use caller::{CircuitBreakerConfig, CircuitBreakerMiddleware};
 
 let config = CircuitBreakerConfig::new()
-    .with_failure_threshold(5)      // Open after 5 failures
-    .with_timeout_ms(30000)          // Wait 30s before trying again
-    .with_success_threshold(2)       // Close after 2 successes
+    .with_failure_threshold(5)
+    .with_timeout_ms(30_000)
+    .with_success_threshold(2)
     .with_failure_status_codes(vec![500, 502, 503, 504]);
 
 let middleware = CircuitBreakerMiddleware::with_config(config);
 ```
 
-#### Circuit Breaker States
+## 组合 Middleware
 
-| State | Description |
-|-------|-------------|
-| **Closed** | Normal operation, requests flow through |
-| **Open** | Requests are blocked, waiting for timeout |
-| **HalfOpen** | Testing if service has recovered |
-
-#### Monitoring
+可以用 `MiddlewareChain` 按顺序组织多个 middleware：
 
 ```rust
-// Get current state
-let state = middleware.state();
-
-// Get statistics
-let stats = middleware.stats();
-println!("Failures: {}", stats.failure_count);
-println!("Blocked: {}", stats.blocked_count);
-
-// Reset the circuit
-middleware.reset();
-```
-
-## Creating Custom Middleware
-
-Implement the `Middleware` trait:
-
-```rust
-use caller::domain::middleware::{Middleware, RequestContext, ResponseContext};
-use caller::CallerError;
-use async_trait::async_trait;
-
-pub struct MyMiddleware;
-
-#[async_trait]
-impl Middleware for MyMiddleware {
-    async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
-        // Modify request before sending
-        ctx.headers.insert(
-            "x-custom-header".parse().unwrap(),
-            "value".parse().unwrap()
-        );
-        Ok(())
-    }
-
-    async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
-        // Process response after receiving
-        println!("Response time: {}ms", ctx.duration_ms);
-        Ok(())
-    }
-
-    async fn on_error(&self, error: &CallerError, ctx: &RequestContext) {
-        // Handle errors
-        eprintln!("Request failed: {}", error);
-    }
-
-    fn name(&self) -> &str {
-        "MyMiddleware"
-    }
-}
-```
-
-## Middleware Chain
-
-Combine multiple middleware:
-
-```rust
-use caller::domain::middleware::{
-    MiddlewareChain,
-    HeaderMiddleware,
-    LoggingMiddleware,
-    UserAgentMiddleware,
-};
+use caller::{HeaderMiddleware, LoggingMiddleware, MiddlewareChain, UserAgentMiddleware};
 
 let chain = MiddlewareChain::new()
     .with(HeaderMiddleware::new().with_header("X-App", "MyApp"))
     .with(UserAgentMiddleware::new("MyApp/1.0"))
     .with(LoggingMiddleware::new());
-
-// Execute before request
-chain.before_request(&mut ctx).await?;
-
-// Execute after response
-chain.after_response(&mut response_ctx).await?;
 ```
 
-## Request Context
-
-The `RequestContext` contains all information about an outgoing request:
+手动执行：
 
 ```rust
-let ctx = RequestContext::new("GET", "https://api.example.com/users")
-    .with_header("Accept", "application/json")
-    .with_body(r#"{"key": "value"}"#.to_string())
-    .with_params(params)
-    .with_metadata("trace_id", "abc123");
+# use caller::{CallerError, HeaderMiddleware, LoggingMiddleware, Middleware, MiddlewareChain, RequestContext, ResponseContext, UserAgentMiddleware};
+# async fn demo() -> Result<(), CallerError> {
+let chain = MiddlewareChain::new()
+    .with(HeaderMiddleware::new().with_header("X-App", "MyApp"))
+    .with(UserAgentMiddleware::new("MyApp/1.0"))
+    .with(LoggingMiddleware::new());
+
+let mut request = RequestContext::new("GET", "https://api.example.com/users");
+chain.before_request(&mut request).await?;
+
+let mut response = ResponseContext::new(200, "{}".to_string(), request, 15);
+chain.after_response(&mut response).await?;
+# Ok(())
+# }
 ```
 
-## Response Context
-
-The `ResponseContext` contains all information about a received response:
+## 自定义 Middleware
 
 ```rust
-// Status checks
-if response.is_success() {
-    // 2xx status code
-}
-if response.is_client_error() {
-    // 4xx status code
-}
-if response.is_server_error() {
-    // 5xx status code
-}
+use async_trait::async_trait;
+use caller::{CallerError, Middleware, RequestContext, ResponseContext};
 
-// Access data
-println!("Status: {}", response.status_code);
-println!("Body: {}", response.body);
-println!("Duration: {}ms", response.duration_ms);
-```
-
-## Best Practices
-
-1. **Order matters**: Middleware is executed in the order added to the chain
-2. **Keep it simple**: Each middleware should do one thing well
-3. **Handle errors**: Return errors to abort the request chain
-4. **Use metadata**: Store request-scoped data in `ctx.metadata`
-5. **Be async-safe**: Middleware must be `Send + Sync`
-
-## Common Patterns
-
-### Request ID Tracking
-
-```rust
-pub struct RequestIdMiddleware;
+pub struct TraceMiddleware;
 
 #[async_trait]
-impl Middleware for RequestIdMiddleware {
+impl Middleware for TraceMiddleware {
     async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
-        let request_id = uuid::Uuid::new_v4().to_string();
-        ctx.metadata.insert("request_id".to_string(), request_id.clone());
-        ctx.headers.insert("x-request-id".parse().unwrap(), request_id.parse().unwrap());
+        ctx.metadata
+            .insert("trace_id".to_string(), "trace-001".to_string());
+        Ok(())
+    }
+
+    async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
+        println!("{}ms", ctx.duration_ms);
         Ok(())
     }
 
     fn name(&self) -> &str {
-        "RequestIdMiddleware"
+        "TraceMiddleware"
     }
 }
 ```
 
-### Rate Limiting
+## 适合的使用方式
 
-```rust
-use std::sync::Arc;
-use tokio::sync::Semaphore;
+- 在你自己的上层 SDK 中把 `MiddlewareChain` 接到真正的请求实现上
+- 在单元测试里验证 header / metadata / circuit breaker 行为
+- 作为后续将 middleware 正式接入 `Caller` 的过渡抽象
 
-pub struct RateLimitMiddleware {
-    semaphore: Arc<Semaphore>,
-}
+## 当前不应假设的能力
 
-impl RateLimitMiddleware {
-    pub fn new(max_concurrent: usize) -> Self {
-        Self {
-            semaphore: Arc::new(Semaphore::new(max_concurrent)),
-        }
-    }
-}
+目前不要假设这些 middleware 已经：
 
-#[async_trait]
-impl Middleware for RateLimitMiddleware {
-    async fn before_request(&self, _ctx: &mut RequestContext) -> Result<(), CallerError> {
-        self.semaphore.acquire().await?.forget();
-        Ok(())
-    }
+- 自动被 `Caller::call(...)` 执行
+- 自动作用于 `download(...)`
+- 自动替代 `RetryConfig`
 
-    fn name(&self) -> &str {
-        "RateLimitMiddleware"
-    }
-}
-```
+如果你需要真实请求层面的可组合扩展，这一块还需要后续继续集成。

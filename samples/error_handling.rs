@@ -28,9 +28,9 @@ async fn main() {
 
     // 示例2: 方法不存在错误
     println!("2. 方法不存在错误:");
-    match call("JP.nonexistentMethod", None).await {
+    match call("JP.nonexistentmethod", None).await {
         Ok(_) => println!("   ❌ 不应该成功!"),
-        Err(CallerError::MethodNotFound(service_method)) => {
+        Err(CallerError::methodNotFound(service_method)) => {
             println!("   ✅ 捕获到方法不存在错误: {}", service_method);
         }
         Err(e) => println!("   ❌ 意外的错误类型: {}", e),
@@ -87,7 +87,7 @@ async fn main() {
                     CallerError::ServiceNotFound(_) => {
                         println!("          错误类型: 服务不存在");
                     }
-                    CallerError::MethodNotFound(_) => {
+                    CallerError::methodNotFound(_) => {
                         println!("          错误类型: 方法不存在");
                     }
                     CallerError::ParamMissing(_) => {
@@ -121,7 +121,7 @@ async fn main() {
                 if result.status_code.is_success() {
                     println!("      ✅ 调用成功");
                     // 安全地获取第一个元素的ID
-                    if let Some(id) = result.get_as_i64("0.id") {
+                    if let Some(id) = result.i64_at("0.id") {
                         println!("      第一个元素的ID: {}", id);
                     }
                 } else {

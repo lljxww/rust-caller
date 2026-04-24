@@ -21,8 +21,22 @@ A flexible, configurable Web API request library built with Rust.
 
 ```toml
 [dependencies]
-caller = "0.3.0"
-tokio = { version = "1.0", features = ["full"] }
+caller = "0.3.3"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+```
+
+### Recommended: Instance API
+
+```rust
+use caller::Caller;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let caller = Caller::from_path("caller.json")?;
+    let result = caller.call("JP.list", None).await?;
+    println!("Status: {}", result.status_code);
+    Ok(())
+}
 ```
 
 ### Basic Usage
@@ -41,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Status: {}", result.status_code);
 
     // Get nested field
-    if let Some(title) = result.get_as_str("0.title") {
+    if let Some(title) = result.str_at("0.title") {
         println!("First post: {}", title);
     }
 
@@ -59,10 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Topic | Description |
 |-------|-------------|
-| [Configuration](docs/configuration_EN.md) | Config file format, multi-format support, hot reload |
-| [Authentication](docs/authentication_EN.md) | Auth types, dynamic tokens, runtime updates |
-| [Middleware](docs/middleware_EN.md) | Request/response interception, circuit breaker, logging |
-| [API Server](docs/server_EN.md) | Swagger UI, OpenAPI generation, proxy testing |
+| [Configuration](docs/configuration.md) | Config file format, multi-format support, hot reload |
+| [Multi-Format Config](docs/MULTI_FORMAT_CONFIG.md) | JSON / YAML / TOML loading, conversion, validation |
+| [Authentication](docs/authentication.md) | Auth types, dynamic tokens, runtime updates |
+| [Middleware](docs/middleware.md) | Middleware primitives, current scope, extension patterns |
+| [API Server](docs/server.md) | Swagger UI, OpenAPI generation, current proxy limitations |
+| [Refactor Checklist](docs/CRATE_REFACTOR_CHECKLIST.md) | Current crate maturity, completed work, next priorities |
 
 ## Authentication
 
@@ -84,7 +100,7 @@ register_auth("dynamic", DynamicBearerAuth::from_shared(token.clone()))?;
 *token.write().unwrap() = "refreshed-token".to_string();
 ```
 
-→ [Full Authentication Guide](docs/authentication_EN.md)
+→ [Full Authentication Guide](docs/authentication.md)
 
 ## API Documentation Server
 
@@ -92,7 +108,7 @@ Enable the `server` feature for Swagger UI:
 
 ```toml
 [dependencies]
-caller = { version = "0.3.0", features = ["server"] }
+caller = { version = "0.3.3", features = ["server"] }
 ```
 
 ```bash
@@ -100,29 +116,29 @@ cargo run --features server --example server
 # Open http://localhost:8080 for Swagger UI
 ```
 
-→ [Server Documentation](docs/server_EN.md)
+→ [Server Documentation](docs/server.md)
 
 ## Configuration Example
 
 `caller.json`:
 ```json
 {
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "JP",
-      "BaseUrl": "https://jsonplaceholder.typicode.com",
-      "ApiItems": [
+      "api_name": "JP",
+      "base_url": "https://jsonplaceholder.typicode.com",
+      "api_items": [
         {
-          "Method": "list",
-          "Url": "/posts",
-          "HttpMethod": "GET",
-          "ParamType": "query"
+          "method": "list",
+          "url": "/posts",
+          "http_method": "GET",
+          "param_type": "query"
         },
         {
-          "Method": "get",
-          "Url": "/posts/{id}",
-          "HttpMethod": "GET",
-          "ParamType": "path"
+          "method": "get",
+          "url": "/posts/{id}",
+          "http_method": "GET",
+          "param_type": "path"
         }
       ]
     }
@@ -130,7 +146,26 @@ cargo run --features server --example server
 }
 ```
 
-→ [Configuration Guide](docs/configuration_EN.md)
+→ [Configuration Guide](docs/configuration.md)
+
+### Programmatic Config Example
+
+```rust
+use caller::{ConfigBuilder, HttpMethod, ParamType};
+
+let mut builder = ConfigBuilder::new();
+builder
+    .service("JP", "https://jsonplaceholder.typicode.com")
+    .api_typed("list", "/posts", HttpMethod::Get, [ParamType::Query])
+    .api_endpoint("update", "/posts/{id}")
+    .http_method(HttpMethod::Patch)
+    .param_types([ParamType::Path, ParamType::Json])
+    .description("Update a post")
+    .build()
+    .build();
+
+let config = builder.build();
+```
 
 ## API Reference
 
@@ -154,11 +189,18 @@ let result = call("JP.list", None).await?;
 
 result.status_code     // HTTP status
 result.raw            // Raw response string
-result.j_obj          // JSON Value
+result.body           // ResponseBody::Json / Text / Bytes
+result.json          // JSON Value, or null for non-JSON responses
 
-result.get("0.title")           // Get JSON value
-result.get_as_str("0.title")    // Get as &str
-result.get_as_i64("0.userId")   // Get as i64
+if result.is_json() {
+    result.value_at("0.title");          // Get JSON value
+    result.str_at("0.title");   // Get as &str
+    result.i64_at("0.userId");  // Get as i64
+}
+
+if let Some(text) = result.text() {
+    println!("{}", text);
+}
 ```
 
 ### Retry Configuration
@@ -181,6 +223,9 @@ cargo run --example basic_usage
 
 # Combined parameters
 cargo run --example combined_params
+
+# Instance-based client
+cargo run --example instance_client
 
 # API documentation server
 cargo run --features server --example server

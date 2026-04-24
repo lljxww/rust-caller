@@ -4,6 +4,8 @@
 
 Caller 提供灵活的认证系统，支持静态和动态认证。
 
+认证既可以注册到全局注册表，也可以注册到单个 `Caller` 实例。
+
 ## 快速开始
 
 ```rust
@@ -17,6 +19,19 @@ register_auth("my_api", BearerAuth::new("your-token".to_string()))?;
 
 // 3. 调用 API（自动应用认证）
 let result = call("MyAPI.protected_method", None).await?;
+```
+
+### 实例级注册
+
+如果你不想污染全局状态，可以把认证器挂到具体实例上：
+
+```rust
+use caller::{BearerAuth, Caller};
+
+let caller = Caller::from_path("caller.json")?;
+caller.register_auth("github_auth", BearerAuth::from_env("GITHUB_TOKEN")?)?;
+
+let result = caller.call("GitHub.get_user", None).await?;
 ```
 
 ## 内置认证类型
@@ -143,7 +158,7 @@ use caller::AuthContext;
 register_auth_closure("custom", |builder: RequestBuilder, ctx: &AuthContext| async move {
     Ok(builder
         .header("X-Service", &ctx.service_name)
-        .header("X-Request-Id", uuid::Uuid::new_v4().to_string())
+        .header("X-Request-Id", format!("{}-{}", ctx.service_name, ctx.api_name))
         .bearer_auth(get_token_for(&ctx.service_name))
 })?;
 ```
@@ -178,17 +193,17 @@ update_auth_closure("custom", |builder, ctx| async move {
 
 ```json
 {
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "GitHub",
-      "BaseUrl": "https://api.github.com",
-      "AuthorizationType": "github_auth",
-      "ApiItems": [
+      "api_name": "GitHub",
+      "base_url": "https://api.github.com",
+      "authorization_type": "github_auth",
+      "api_items": [
         {
-          "Method": "get_user",
-          "Url": "/user",
-          "HttpMethod": "GET",
-          "ParamType": "none"
+          "method": "get_user",
+          "url": "/user",
+          "http_method": "GET",
+          "param_type": "none"
         }
       ]
     }
@@ -218,28 +233,28 @@ register_auth("github_auth", BearerAuth::from_env("GITHUB_TOKEN")?)?;
 
 ## 认证优先级
 
-当 Service 和 API Item 都配置了 `AuthorizationType` 时：
+当 Service 和 API Item 都配置了 `authorization_type` 时：
 
 **API Item > Service**
 
 ```json
 {
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "MyAPI",
-      "AuthorizationType": "default_auth",  // 默认认证
-      "ApiItems": [
+      "api_name": "MyAPI",
+      "authorization_type": "default_auth",  // 默认认证
+      "api_items": [
         {
-          "Method": "public",
-          "Url": "/public",
-          "ParamType": "none"
+          "method": "public",
+          "url": "/public",
+          "param_type": "none"
           // 使用 default_auth
         },
         {
-          "Method": "private",
-          "Url": "/private",
-          "ParamType": "none",
-          "AuthorizationType": "special_auth"  // 覆盖为 special_auth
+          "method": "private",
+          "url": "/private",
+          "param_type": "none",
+          "authorization_type": "special_auth"  // 覆盖为 special_auth
         }
       ]
     }

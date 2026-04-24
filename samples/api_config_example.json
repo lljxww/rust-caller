@@ -1,54 +1,54 @@
 {
-  "Authorizations": [
+  "authorizations": [
     {
-      "Name": "BearerAuth",
-      "AuthorizationInfo": "Bearer your-secret-api-token-here"
+      "name": "BearerAuth",
+      "authorization_info": "Bearer your-secret-api-token-here"
     },
     {
-      "Name": "ContentTypeAuth",
-      "AuthorizationInfo": "Content-Type application/json; charset=utf-8"
+      "name": "content_typeAuth",
+      "authorization_info": "Content-Type application/json; charset=utf-8"
     },
     {
-      "Name": "CustomHeaderAuth",
-      "AuthorizationInfo": "X-Custom-Auth custom-auth-value"
+      "name": "CustomHeaderAuth",
+      "authorization_info": "X-Custom-Auth custom-auth-value"
     }
   ],
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "GitHub_API",
-      "BaseUrl": "https://api.github.com",
-      "Timeout": 10000,
-      "ApiItems": [
+      "api_name": "GitHub_API",
+      "base_url": "https://api.github.com",
+      "timeout": 10000,
+      "api_items": [
         {
-          "Method": "get_user",
-          "Url": "/users/{username}",
-          "HttpMethod": "GET",
-          "ParamType": "path"
+          "method": "get_user",
+          "url": "/users/{username}",
+          "http_method": "GET",
+          "param_type": "path"
         },
         {
-          "Method": "get_user_repos",
-          "Url": "/users/{username}/repos",
-          "HttpMethod": "GET",
-          "ParamType": "path,query"
+          "method": "get_user_repos",
+          "url": "/users/{username}/repos",
+          "http_method": "GET",
+          "param_type": "path,query"
         },
         {
-          "Method": "create_issue",
-          "Url": "/repos/{owner}/{repo}/issues",
-          "HttpMethod": "POST",
-          "ParamType": "path,json"
+          "method": "create_issue",
+          "url": "/repos/{owner}/{repo}/issues",
+          "http_method": "POST",
+          "param_type": "path,json"
         }
       ]
     },
     {
-      "ApiName": "Weather_API",
-      "BaseUrl": "https://api.openweathermap.org/data/2.5",
-      "Timeout": 5000,
-      "ApiItems": [
+      "api_name": "Weather_API",
+      "base_url": "https://api.openweathermap.org/data/2.5",
+      "timeout": 5000,
+      "api_items": [
         {
-          "Method": "get_current_weather",
-          "Url": "/weather",
-          "HttpMethod": "GET",
-          "ParamType": "query"
+          "method": "get_current_weather",
+          "url": "/weather",
+          "http_method": "GET",
+          "param_type": "query"
         }
       ]
     }
