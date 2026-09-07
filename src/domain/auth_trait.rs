@@ -68,6 +68,7 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
+    /// Build authentication context for a configured service endpoint.
     pub fn new(
         service_name: String,
         api_name: String,
@@ -99,7 +100,7 @@ impl AuthContext {
 ///
 /// # Returns
 /// Modified request builder or error
-pub type AuthFn = dyn Fn(
+pub(crate) type AuthFn = dyn Fn(
         RequestBuilder,
         &AuthContext,
     ) -> std::pin::Pin<

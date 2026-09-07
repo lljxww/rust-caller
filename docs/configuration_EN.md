@@ -1,43 +1,36 @@
 [English](configuration_EN.md) | [简体中文](configuration_CN.md)
 
-# Configuration Files
+# Configuration
 
-Caller supports multiple configuration file formats: JSON, YAML, and TOML.
+Configuration describes routing and transport behavior. Authentication secrets
+are registered in Rust at runtime and should not be stored in these files.
 
-## Configuration Structure
-
-### Complete Example (JSON)
+## Complete JSON shape
 
 ```json
 {
-  "Authorizations": [],
-  "ServiceItems": [
+  "service_items": [
     {
-      "ApiName": "JP",
-      "BaseUrl": "https://jsonplaceholder.typicode.com",
-      "AuthorizationType": null,
-      "Timeout": 30000,
-      "ApiItems": [
+      "api_name": "catalog",
+      "authorization_type": "catalog_token",
+      "base_url": "https://api.example.com/v1",
+      "timeout": 10000,
+      "api_items": [
         {
-          "Method": "list",
-          "Url": "/posts",
-          "HttpMethod": "GET",
-          "ParamType": "query",
-          "Description": "List all posts"
+          "method": "get_product",
+          "url": "/products/{id}",
+          "http_method": "GET",
+          "param_type": "path,query",
+          "description": "Get one product",
+          "timeout": 3000
         },
         {
-          "Method": "get",
-          "Url": "/posts/{id}",
-          "HttpMethod": "GET",
-          "ParamType": "path",
-          "Description": "Get single post"
-        },
-        {
-          "Method": "create",
-          "Url": "/posts",
-          "HttpMethod": "POST",
-          "ParamType": "json",
-          "Description": "Create new post"
+          "method": "update_product",
+          "url": "/products/{id}",
+          "http_method": "PATCH",
+          "param_type": "path,json",
+          "content_type": "application/json",
+          "authorization_type": "admin_token"
         }
       ]
     }
@@ -45,241 +38,99 @@ Caller supports multiple configuration file formats: JSON, YAML, and TOML.
 }
 ```
 
-## Field Descriptions
+`authorizations` is optional and defaults to an empty list. It remains only as
+legacy input metadata; it does not create runtime authenticators and is omitted
+when serializing or converting configuration. Do not put secrets in
+`authorization_info`. Register a provider whose name matches
+`authorization_type` instead.
 
-### ServiceItem
+## Service fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `ApiName` | string | ✅ | Service name, used for reference when calling |
-| `BaseUrl` | string | ✅ | API base URL |
-| `AuthorizationType` | string | ❌ | Default authentication type |
-| `Timeout` | number | ❌ | Default timeout (milliseconds) |
-| `ApiItems` | array | ✅ | List of API endpoints |
+| Field | Required | Meaning |
+|---|---:|---|
+| `api_name` | yes | Unique service name used by `service.method`; non-empty, no `.` or surrounding whitespace |
+| `base_url` | yes | Absolute HTTP(S) URL without userinfo, query, or fragment |
+| `authorization_type` | no | Runtime auth provider name inherited by endpoints |
+| `timeout` | no | Request timeout in milliseconds; must be greater than zero |
+| `api_items` | yes | Endpoint list; an empty list is valid |
+| `use_new_http_client` | no | Legacy compatibility field; currently has no effect |
 
-### ApiItem
+## Endpoint fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `Method` | string | ✅ | Method name, use `ServiceName.MethodName` when calling |
-| `Url` | string | ✅ | Relative URL, supports path parameters `{id}` |
-| `HttpMethod` | string | ✅ | HTTP method: GET, POST, PUT, DELETE, PATCH |
-| `ParamType` | string | ✅ | Parameter type (see table below) |
-| `Description` | string | ❌ | Method description |
-| `AuthorizationType` | string | ❌ | Override service-level authentication |
-| `Timeout` | number | ❌ | Override service-level timeout |
-| `ContentType` | string | ❌ | Custom Content-Type |
+| Field | Required | Meaning |
+|---|---:|---|
+| `method` | yes | Unique endpoint name inside the service; non-empty, no `.` or surrounding whitespace |
+| `url` | yes | Empty for the service root, otherwise starts with `/` |
+| `http_method` | yes | `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, or `OPTIONS` |
+| `param_type` | yes | One or more comma-separated parameter locations |
+| `description` | no | Human-readable description used by OpenAPI |
+| `content_type` | no | Explicit request Content-Type |
+| `authorization_type` | no | Endpoint auth provider override |
+| `timeout` | no | Endpoint timeout override in milliseconds |
+| `need_cache`, `cache_time`, `use_new_http_client` | no | Legacy compatibility fields; currently have no effect |
 
-### ParamType Parameter Types
+Valid parameter locations are `none`, `path`, `query`, `json`, and `form`.
+`none` cannot be combined with another value; duplicates and `json,form` are
+rejected. A URL containing `{name}` must declare `path`, and an endpoint that
+declares `path` must contain at least one placeholder.
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `none` | No parameters | `/posts` |
-| `query` | URL query parameters | `/posts?userId=1` |
-| `path` | URL path parameters | `/posts/1` |
-| `json` | JSON request body | `{"title":"Test"}` |
-| `form` | Form data | `title=Test&body=Content` |
-| `path,json` | Path + JSON | `/posts/1` + `{"title":"Updated"}` |
-| `path,query` | Path + Query | `/posts/1?fields=id,title` |
+Timeout resolution is endpoint, then service, then the `CallerBuilder` default
+(30 seconds). JSON requests default to `application/json`; other request kinds
+do not receive an implicit Content-Type.
 
-## Multi-format Support
+## Loading and validation
 
-### JSON (Default)
+```rust,no_run
+use caller::{Caller, ConfigLoader};
 
-File: `caller.json`
-
-```json
-{
-  "ServiceItems": [...]
-}
+let caller = Caller::from_path("config/caller.yaml")?;
+let config = ConfigLoader::load_config_from_path("config/caller.toml")?;
+# Ok::<(), caller::CallerError>(())
 ```
 
-### YAML
+The extension selects JSON, YAML, or TOML. Parsing immediately validates names,
+URL rules, duplicate services/endpoints, parameter combinations, timeouts,
+header values, and unknown fields. Runtime auth registration is validated when
+the request is prepared.
 
-File: `caller.yaml` or `caller.yml`
-
-```yaml
-ServiceItems:
-  - ApiName: JP
-    BaseUrl: https://jsonplaceholder.typicode.com
-    ApiItems:
-      - Method: list
-        Url: /posts
-        HttpMethod: GET
-        ParamType: query
-```
-
-### TOML
-
-File: `caller.toml`
-
-```toml
-[[ServiceItems]]
-ApiName = "JP"
-BaseUrl = "https://jsonplaceholder.typicode.com"
-
-[[ServiceItems.ApiItems]]
-Method = "list"
-Url = "/posts"
-HttpMethod = "GET"
-ParamType = "query"
-```
-
-## Format Conversion
+Programmatic configuration should finish with `build_validated()`:
 
 ```rust
-use caller::config::config_loader::ConfigLoader;
+use caller::{ConfigBuilder, HttpMethod, ParamType};
 
-// JSON → YAML
-ConfigLoader::convert_config("caller.json", "caller.yaml")?;
-
-// YAML → TOML
-ConfigLoader::convert_config("caller.yaml", "caller.toml")?;
-
-// Explicitly specify format
-use caller::config::config_loader::ConfigFormat;
-ConfigLoader::convert_config_with_format(
-    "config.txt",
-    "output.yaml",
-    ConfigFormat::Json,
-)?;
+let mut builder = ConfigBuilder::new();
+builder
+    .service("health", "https://api.example.com")
+    .api_typed("check", "/health", HttpMethod::Get, [ParamType::None])
+    .build();
+let config = builder.build_validated()?;
+# Ok::<(), caller::CallerError>(())
 ```
 
-## Configuration Loading
+The string-based `ServiceBuilder::api(...)` is fallible. Prefer `api_typed` or
+`api_endpoint` when constructing new code.
 
-### Automatic Loading
+## Global configuration and watching
 
-```rust
-use caller::init_config;
+The crate-root `init_config`, `reload_config`, and watch helpers use exactly
+`./caller.json`. For arbitrary files, use an instance `Caller`.
 
-// Load from ./caller.json (or .yaml/.toml)
+```rust,no_run
+use caller::{init_config, last_config_watch_error, watch_config};
+
 init_config()?;
-```
-
-### Manual Loading
-
-```rust
-use caller::config::config_loader::ConfigLoader;
-
-// Load from specific path
-ConfigLoader::load_config_from_path("config/api.json")?;
-
-// Explicitly specify format
-ConfigLoader::load_config_from_path_with_format(
-    "config/api.txt",
-    ConfigFormat::Json,
-)?;
-```
-
-### Programmatic Configuration
-
-```rust
-use caller::config::config_loader::ConfigLoader;
-use caller::domain::{CallerConfig, ServiceItem, ApiItem};
-
-let config = CallerConfig {
-    service_items: vec![
-        ServiceItem {
-            api_name: "MyAPI".to_string(),
-            base_url: "https://api.example.com".to_string(),
-            authorization_type: None,
-            timeout: Some(30000),
-            api_items: vec![
-                ApiItem {
-                    method: "list".to_string(),
-                    url: "/items".to_string(),
-                    http_method: "GET".to_string(),
-                    param_type: "query".to_string(),
-                    description: Some("List items".to_string()),
-                    // ...
-                },
-            ],
-            use_new_http_client: None,
-        },
-    ],
-    authorizations: vec![],
-};
-
-ConfigLoader::init_with_config(config);
-```
-
-## Hot Reload
-
-```rust
-use caller::config::config_loader::ConfigLoader;
-use std::time::Duration;
-
-// Start file watching
-ConfigLoader::start_watching(Duration::from_millis(500))?;
-
-// Automatically reloads when config file changes
-// No need to restart application
-```
-
-## Environment Variables
-
-Use environment variables in URLs:
-
-```json
-{
-  "ServiceItems": [
-    {
-      "ApiName": "Internal",
-      "BaseUrl": "http://${API_HOST}:${API_PORT}",
-      ...
-    }
-  ]
+watch_config()?;
+if let Some(error) = last_config_watch_error() {
+    eprintln!("last asynchronous reload failed: {error}");
 }
+# Ok::<(), caller::CallerError>(())
 ```
 
-## Best Practices
+Watch reload is debounced. A bad update does not replace the last valid config;
+inspect `last_config_watch_error()` because filesystem callbacks cannot return
+asynchronous failures to the original caller. `ConfigLoader::init_with_config`
+also validates before changing global state.
 
-### 1. Separate by Environment
-
-```
-config/
-├── caller.dev.json
-├── caller.staging.json
-└── caller.prod.json
-```
-
-```rust
-let env = std::env::var("ENV").unwrap_or("dev".to_string());
-let config_path = format!("config/caller.{}.json", env);
-ConfigLoader::load_config_from_path(&config_path)?;
-```
-
-### 2. Use Authentication System for Sensitive Information
-
-Don't hardcode tokens in configuration files:
-
-```json
-// ❌ Not recommended
-{
-  "Authorizations": [
-    { "Token": "hardcoded-secret-token" }
-  ]
-}
-
-// ✅ Recommended: config only references name
-{
-  "ServiceItems": [{
-    "AuthorizationType": "github_auth"
-  }]
-}
-
-// Register in code
-BearerAuth::from_env("GITHUB_TOKEN")?;
-register_auth("github_auth", auth)?;
-```
-
-### 3. Version Control
-
-```json
-{
-  "_meta": {
-    "version": "1.0.0",
-    "last_updated": "2024-01-15"
-  },
-  "ServiceItems": [...]
-}
+There is no `${ENV_VAR}` interpolation in URLs or other config fields. Resolve
+environment-specific values before building the config, or select different
+files per environment. Never embed credentials in a URL.

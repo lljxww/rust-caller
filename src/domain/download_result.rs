@@ -1,14 +1,20 @@
 use crate::shared::error::CallerError;
 use reqwest::StatusCode;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// Download result containing file information and content
 #[derive(Debug, Clone)]
 pub struct DownloadResult {
+    /// HTTP response status.
     pub status_code: StatusCode,
+    /// Complete buffered response bytes.
     pub content: Vec<u8>,
+    /// Response content type, defaulting to `application/octet-stream`.
     pub content_type: String,
+    /// File extension inferred from the content type or set by the caller.
     pub file_extension: String,
+    /// Safe filename candidate extracted from response metadata or set explicitly.
     pub suggested_filename: Option<String>,
 }
 
@@ -18,19 +24,19 @@ impl DownloadResult {
         status_code: StatusCode,
         content: Vec<u8>,
         content_type: Option<String>,
-    ) -> Result<DownloadResult, CallerError> {
+    ) -> DownloadResult {
         let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
         // Auto-detect file extension from content type
         let file_extension = Self::detect_extension_from_mime(&content_type);
 
-        Ok(DownloadResult {
+        DownloadResult {
             status_code,
             content,
             content_type,
             file_extension,
             suggested_filename: None,
-        })
+        }
     }
 
     /// Detect file extension from MIME type
@@ -140,8 +146,23 @@ impl DownloadResult {
             format!("{}.{}", base_name, self.file_extension)
         };
 
+        validate_filename(&filename)?;
+
         let file_path = dir.join(&filename);
-        self.save_to_file(&file_path)?;
+        ensure_path_is_within_directory(dir, &file_path, &filename)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file_path)
+            .map_err(|error| CallerError::io(format!("creating download '{filename}'"), error))?;
+        if let Err(error) = file.write_all(&self.content) {
+            drop(file);
+            let _ = std::fs::remove_file(&file_path);
+            return Err(CallerError::io(
+                format!("writing download '{filename}'"),
+                error,
+            ));
+        }
 
         Ok(filename)
     }
@@ -171,6 +192,39 @@ impl DownloadResult {
         std::str::from_utf8(&self.content)
             .map_err(|e| CallerError::text_decoding_error(e.to_string()))
     }
+}
+
+fn validate_filename(filename: &str) -> Result<(), CallerError> {
+    let invalid = filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains('\0')
+        || filename.chars().any(char::is_control)
+        || Path::new(filename).is_absolute();
+
+    if invalid {
+        return Err(CallerError::UnsafeDownloadFilename {
+            filename: filename.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn ensure_path_is_within_directory(
+    directory: &Path,
+    file_path: &Path,
+    filename: &str,
+) -> Result<(), CallerError> {
+    let expected: PathBuf = directory.join(filename);
+    if file_path != expected || file_path.parent() != Some(directory) {
+        return Err(CallerError::UnsafeDownloadFilename {
+            filename: filename.to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -219,5 +273,44 @@ mod tests {
             DownloadResult::detect_extension_from_mime("application/json; charset=utf-8"),
             "json"
         );
+    }
+
+    #[test]
+    fn rejects_unsafe_suggested_filenames() {
+        let directory =
+            std::env::temp_dir().join(format!("caller-download-test-{}", std::process::id()));
+        let result = DownloadResult::from_response(
+            StatusCode::OK,
+            b"content".to_vec(),
+            Some("text/plain".to_string()),
+        )
+        .with_filename("../outside.txt".to_string());
+
+        let error = result.save(&directory, "fallback").unwrap_err();
+        assert!(matches!(error, CallerError::UnsafeDownloadFilename { .. }));
+        assert!(!directory.join("../outside.txt").exists());
+        std::fs::remove_dir(directory).ok();
+    }
+
+    #[test]
+    fn automatic_save_does_not_overwrite_existing_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "caller-download-existing-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("file.txt");
+        std::fs::write(&path, b"existing").unwrap();
+        let result = DownloadResult::from_response(
+            StatusCode::OK,
+            b"replacement".to_vec(),
+            Some("text/plain".to_string()),
+        );
+
+        assert!(result.save(&directory, "file").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing");
+
+        std::fs::remove_file(path).ok();
+        std::fs::remove_dir(directory).ok();
     }
 }

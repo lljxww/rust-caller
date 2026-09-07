@@ -5,7 +5,7 @@ use crate::domain::api_config::{ApiConfig, HttpMethod};
 use std::io::{self, Write};
 
 /// Run the configuration management CLI
-pub fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 Caller Configuration Manager");
     println!("================================\n");
 
@@ -77,7 +77,10 @@ fn add_service(builder: &mut ConfigBuilder) -> Result<(), Box<dyn std::error::Er
 
         let method = read_line_required("API method name: ")?;
         let url = read_line_required("URL path (e.g., /users/{id}): ")?;
-        let http_method = read_line_default("HTTP method (GET/POST/PUT/DELETE/PATCH)", "GET")?;
+        let http_method = read_line_default(
+            "HTTP method (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS)",
+            "GET",
+        )?;
         let param_type = read_line_required("Param type (none/query/path/json/form): ")?;
         let description = read_line("Description (optional): ")?;
 

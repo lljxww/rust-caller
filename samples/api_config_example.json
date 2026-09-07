@@ -1,18 +1,5 @@
 {
-  "authorizations": [
-    {
-      "name": "BearerAuth",
-      "authorization_info": "Bearer your-secret-api-token-here"
-    },
-    {
-      "name": "content_typeAuth",
-      "authorization_info": "Content-Type application/json; charset=utf-8"
-    },
-    {
-      "name": "CustomHeaderAuth",
-      "authorization_info": "X-Custom-Auth custom-auth-value"
-    }
-  ],
+  "authorizations": [],
   "service_items": [
     {
       "api_name": "GitHub_API",

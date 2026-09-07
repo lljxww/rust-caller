@@ -75,6 +75,51 @@ pub(crate) fn validate_path_parameters(
     Ok(())
 }
 
+pub(crate) fn validate_exact_path_parameters(
+    url: &str,
+    provided_params: Vec<&str>,
+) -> Result<(), CallerError> {
+    validate_path_parameters(url, provided_params.clone())?;
+    let required_params = path_parameter_names(url);
+
+    if let Some(extra) = provided_params
+        .into_iter()
+        .find(|provided| !required_params.iter().any(|required| required == provided))
+    {
+        return Err(CallerError::parameter_error(format!(
+            "Unexpected path parameter: {extra}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn path_parameter_names(url: &str) -> Vec<String> {
+    let mut required_params = Vec::new();
+    let mut current_param = String::new();
+    let mut in_param = false;
+
+    for character in url.chars() {
+        match character {
+            '{' => {
+                in_param = true;
+                current_param.clear();
+            }
+            '}' if in_param => {
+                if !current_param.is_empty() && !required_params.contains(&current_param) {
+                    required_params.push(current_param.clone());
+                }
+                in_param = false;
+            }
+            '}' => {}
+            _ if in_param => current_param.push(character),
+            _ => {}
+        }
+    }
+
+    required_params
+}
+
 pub(crate) fn substitute_path_parameters(
     url: &str,
     params: &HashMap<String, String>,
@@ -84,7 +129,7 @@ pub(crate) fn substitute_path_parameters(
     for (key, value) in params {
         let placeholder = format!("{{{}}}", key);
         if result.contains(&placeholder) {
-            result = result.replace(&placeholder, value);
+            result = result.replace(&placeholder, &encode_path_segment(value));
         }
     }
 
@@ -117,6 +162,20 @@ pub(crate) fn substitute_path_parameters(
     }
 
     Ok(result)
+}
+
+fn encode_path_segment(value: &str) -> String {
+    use std::fmt::Write;
+
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            write!(&mut encoded, "%{byte:02X}").expect("writing to String cannot fail");
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -161,7 +220,7 @@ mod tests {
         let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         ConfigLoader::reset_state_for_test();
         crate::clear_auth().unwrap();
-        ConfigLoader::init_with_config(test_config_with_auth("missing_provider"));
+        ConfigLoader::init_with_config(test_config_with_auth("missing_provider")).unwrap();
 
         let err = crate::call("AuthService.list", None)
             .await

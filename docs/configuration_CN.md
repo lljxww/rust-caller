@@ -1,48 +1,35 @@
 [English](configuration_EN.md) | 简体中文
 
-# 配置文件
+# 配置
 
-Caller 支持多种配置文件格式：JSON、YAML 和 TOML。
+配置文件只描述路由与传输行为。认证密钥应在 Rust 运行时注册，不应写进配置文件。
 
-本文覆盖两类配置方式：
-
-- 配置文件：适合部署、热更新和跨语言共享
-- 程序化配置：适合测试、样例和运行时动态组装
-
-## 配置结构
-
-### 完整示例（JSON）
+## 完整 JSON 结构
 
 ```json
 {
-  "authorizations": [],
   "service_items": [
     {
-      "api_name": "JP",
-      "base_url": "https://jsonplaceholder.typicode.com",
-      "authorization_type": null,
-      "timeout": 30000,
+      "api_name": "catalog",
+      "authorization_type": "catalog_token",
+      "base_url": "https://api.example.com/v1",
+      "timeout": 10000,
       "api_items": [
         {
-          "method": "list",
-          "url": "/posts",
+          "method": "get_product",
+          "url": "/products/{id}",
           "http_method": "GET",
-          "param_type": "query",
-          "description": "List all posts"
+          "param_type": "path,query",
+          "description": "获取单个商品",
+          "timeout": 3000
         },
         {
-          "method": "get",
-          "url": "/posts/{id}",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "Get single post"
-        },
-        {
-          "method": "create",
-          "url": "/posts",
-          "http_method": "POST",
-          "param_type": "json",
-          "description": "Create new post"
+          "method": "update_product",
+          "url": "/products/{id}",
+          "http_method": "PATCH",
+          "param_type": "path,json",
+          "content_type": "application/json",
+          "authorization_type": "admin_token"
         }
       ]
     }
@@ -50,256 +37,92 @@ Caller 支持多种配置文件格式：JSON、YAML 和 TOML。
 }
 ```
 
-## 字段说明
+`authorizations` 可省略，默认空列表。该字段只作为旧格式的输入元数据保留，不会
+创建运行时 authenticator，序列化或格式转换时会被省略。不要把密钥写入
+`authorization_info`；应注册与 `authorization_type` 同名的运行时 provider。
 
-### ServiceConfig
+## Service 字段
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `api_name` | string | ✅ | 服务名称，用于调用时引用 |
-| `base_url` | string | ✅ | API 基础 URL |
-| `authorization_type` | string | ❌ | 默认认证类型 |
-| `timeout` | number | ❌ | 默认超时（毫秒） |
-| `api_items` | array | ✅ | API 端点列表 |
+| 字段 | 必填 | 说明 |
+|---|---:|---|
+| `api_name` | 是 | `service.method` 中的唯一服务名；非空、不能含 `.`、不能有首尾空格 |
+| `base_url` | 是 | HTTP(S) 绝对 URL；不能含用户凭据、query 或 fragment |
+| `authorization_type` | 否 | endpoint 默认继承的运行时认证 provider 名称 |
+| `timeout` | 否 | 请求超时，单位毫秒，必须大于 0 |
+| `api_items` | 是 | endpoint 列表，允许为空 |
+| `use_new_http_client` | 否 | 兼容旧格式的保留字段，当前无行为 |
 
-### ApiConfig
+## Endpoint 字段
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `method` | string | ✅ | 方法名，调用时使用 `Servicename.methodname` |
-| `url` | string | ✅ | 相对 URL，支持路径参数 `{id}` |
-| `http_method` | string | ✅ | HTTP 方法：GET, POST, PUT, DELETE, PATCH |
-| `param_type` | string | ✅ | 参数类型（见下表） |
-| `description` | string | ❌ | 方法描述 |
-| `authorization_type` | string | ❌ | 覆盖服务级认证 |
-| `timeout` | number | ❌ | 覆盖服务级超时 |
-| `content_type` | string | ❌ | 自定义 Content-Type |
+| 字段 | 必填 | 说明 |
+|---|---:|---|
+| `method` | 是 | service 内唯一的方法名；非空、不能含 `.`、不能有首尾空格 |
+| `url` | 是 | 空串表示 service 根路径；非空时必须以 `/` 开头 |
+| `http_method` | 是 | `GET`、`POST`、`PUT`、`DELETE`、`PATCH`、`HEAD` 或 `OPTIONS` |
+| `param_type` | 是 | 一个或多个逗号分隔的参数位置 |
+| `description` | 否 | OpenAPI 使用的描述 |
+| `content_type` | 否 | 显式请求 Content-Type |
+| `authorization_type` | 否 | endpoint 级认证 provider 覆盖 |
+| `timeout` | 否 | endpoint 级超时，单位毫秒 |
+| `need_cache`、`cache_time`、`use_new_http_client` | 否 | 兼容旧格式的保留字段，当前无行为 |
 
-### param_type 参数类型
+参数位置支持 `none`、`path`、`query`、`json` 和 `form`。`none` 不能与其他
+值组合，重复类型以及 `json,form` 会被拒绝。URL 含 `{name}` 时必须声明
+`path`；声明 `path` 时也必须存在至少一个占位符。
 
-| 类型 | 说明 | 示例 |
-|------|------|------|
-| `none` | 无参数 | `/posts` |
-| `query` | URL 查询参数 | `/posts?userId=1` |
-| `path` | URL 路径参数 | `/posts/1` |
-| `json` | JSON 请求体 | `{"title":"Test"}` |
-| `form` | 表单数据 | `title=Test&body=Content` |
-| `path,json` | 路径 + JSON | `/posts/1` + `{"title":"Updated"}` |
-| `path,query` | 路径 + 查询 | `/posts/1?fields=id,title` |
+超时优先级是 endpoint、service、`CallerBuilder` 默认值（30 秒）。JSON 请求
+默认使用 `application/json`，其他请求类型不会被自动添加 Content-Type。
 
-## 多格式支持
+## 加载与校验
 
-### JSON（默认）
+```rust,no_run
+use caller::{Caller, ConfigLoader};
 
-文件：`caller.json`
-
-```json
-{
-  "service_items": [...]
-}
+let caller = Caller::from_path("config/caller.yaml")?;
+let config = ConfigLoader::load_config_from_path("config/caller.toml")?;
+# Ok::<(), caller::CallerError>(())
 ```
 
-### YAML
+扩展名决定 JSON、YAML 或 TOML。解析后立即检查名称、URL、重复 service/
+endpoint、参数组合、超时、Header 值和未知字段。运行时认证注册表只能在准备
+请求时校验。
 
-文件：`caller.yaml` 或 `caller.yml`
-
-```yaml
-service_items:
-  - api_name: JP
-    base_url: https://jsonplaceholder.typicode.com
-    api_items:
-      - method: list
-        url: /posts
-        http_method: GET
-        param_type: query
-```
-
-### TOML
-
-文件：`caller.toml`
-
-```toml
-[[service_items]]
-api_name = "JP"
-base_url = "https://jsonplaceholder.typicode.com"
-
-[[service_items.api_items]]
-method = "list"
-url = "/posts"
-http_method = "GET"
-param_type = "query"
-```
-
-## 格式转换
+程序化构造应以 `build_validated()` 收口：
 
 ```rust
-use caller::ConfigLoader;
-
-// JSON → YAML
-ConfigLoader::convert_config("caller.json", "caller.yaml")?;
-
-// YAML → TOML
-ConfigLoader::convert_config("caller.yaml", "caller.toml")?;
-
-// 显式指定格式
-use caller::ConfigFileFormat;
-ConfigLoader::convert_config_with_format(
-    "config.txt",
-    "output.yaml",
-    ConfigFileFormat::Json,
-)?;
-```
-
-## 配置加载
-
-### 自动加载
-
-```rust
-use caller::init_config;
-
-// 当前默认只从 ./caller.json 加载
-init_config()?;
-```
-
-说明：
-
-- `init_config()` / `reload_config()` / `watch_config()` 当前都绑定默认全局路径 `./caller.json`
-- 如果你要加载 `caller.yaml` 或 `caller.toml`，请改用 `ConfigLoader::load_config_from_path(...)`
-- 如果你希望每个实例各自持有自己的配置，优先使用 `Caller::from_path(...)`
-
-### 手动加载
-
-```rust
-use caller::ConfigLoader;
-
-// 从指定路径加载
-ConfigLoader::load_config_from_path("config/api.json")?;
-
-// 显式指定格式
-use caller::ConfigFileFormat;
-ConfigLoader::load_config_from_path_with_format(
-    "config/api.txt",
-    ConfigFileFormat::Json,
-)?;
-```
-
-### 程序化配置
-
-```rust
-use caller::{ConfigBuilder, ConfigLoader, HttpMethod, ParamType};
+use caller::{ConfigBuilder, HttpMethod, ParamType};
 
 let mut builder = ConfigBuilder::new();
 builder
-    .service("MyAPI", "https://api.example.com")
-    .timeout(30_000)
-    .api_typed("list", "/items", HttpMethod::Get, [ParamType::Query])
-    .api_endpoint("create", "/items/{id}")
-    .http_method(HttpMethod::Post)
-    .param_types([ParamType::Path, ParamType::Json])
-    .description("Create an item")
-    .content_type("application/json")
-    .timeout(5_000)
-    .build()
+    .service("health", "https://api.example.com")
+    .api_typed("check", "/health", HttpMethod::Get, [ParamType::None])
     .build();
-
-let config = builder.build();
-
-ConfigLoader::init_with_config(config);
+let config = builder.build_validated()?;
+# Ok::<(), caller::CallerError>(())
 ```
 
-## 配置热更新
+字符串版本的 `ServiceBuilder::api(...)` 会返回 `Result`。新代码优先使用
+`api_typed` 或 `api_endpoint`。
 
-```rust
-use caller::ConfigLoader;
-use std::time::Duration;
+## 全局配置与监听
 
-// 启动文件监视
-ConfigLoader::start_watching(Duration::from_millis(500))?;
+crate root 的 `init_config`、`reload_config` 和 watch 函数固定使用
+`./caller.json`。任意路径应使用实例化 `Caller`。
 
-// 配置文件修改后自动重新加载
-// 无需重启应用
-```
+```rust,no_run
+use caller::{init_config, last_config_watch_error, watch_config};
 
-限制说明：
-
-- 当前全局 watch 机制同样只围绕默认全局路径 `./caller.json`
-- 如果你使用实例化 `Caller`，可以调用 `Caller::reload_config()` 手动刷新实例配置
-
-## 环境变量
-
-在 URL 中使用环境变量：
-
-```json
-{
-  "service_items": [
-    {
-      "api_name": "Internal",
-      "base_url": "http://${API_HOST}:${API_PORT}",
-      ...
-    }
-  ]
+init_config()?;
+watch_config()?;
+if let Some(error) = last_config_watch_error() {
+    eprintln!("最近一次异步重载失败：{error}");
 }
+# Ok::<(), caller::CallerError>(())
 ```
 
-## 最佳实践
+监听重载带 debounce。错误配置不会替换最后一份有效配置；文件系统回调无法把
+异步错误返回给最初调用者，因此要检查 `last_config_watch_error()`。
+`ConfigLoader::init_with_config` 也会先校验再修改全局状态。
 
-### 1. 按环境分离
-
-```
-config/
-├── caller.dev.json
-├── caller.staging.json
-└── caller.prod.json
-```
-
-```rust
-let env = std::env::var("ENV").unwrap_or("dev".to_string());
-let config_path = format!("config/caller.{}.json", env);
-ConfigLoader::load_config_from_path(&config_path)?;
-```
-
-如果你想保持实例级隔离：
-
-```rust
-use caller::Caller;
-
-let env = std::env::var("ENV").unwrap_or("dev".to_string());
-let config_path = format!("config/caller.{}.yaml", env);
-let caller = Caller::from_path(&config_path)?;
-```
-
-### 2. 敏感信息使用认证系统
-
-不要在配置文件中硬编码 token：
-
-```json
-// ❌ 不推荐
-{
-  "authorizations": [
-    { "token": "hardcoded-secret-token" }
-  ]
-}
-
-// ✅ 推荐：配置只引用名称
-{
-  "service_items": [{
-    "authorization_type": "github_auth"
-  }]
-}
-
-// 代码中注册
-BearerAuth::from_env("GITHUB_TOKEN")?;
-register_auth("github_auth", auth)?;
-```
-
-### 3. 版本控制
-
-```json
-{
-  "_meta": {
-    "version": "1.0.0",
-    "last_updated": "2024-01-15"
-  },
-  "service_items": [...]
-}
-```
+当前不支持在 URL 或其他字段中做 `${ENV_VAR}` 插值。应在构造配置前解析环境
+差异，或为不同环境选择不同文件。禁止把凭据嵌入 URL。

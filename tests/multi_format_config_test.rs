@@ -81,7 +81,7 @@ fn test_convert_with_explicit_format() {
     // Verify that content is YAML format
     let output_content = fs::read_to_string(output_file).unwrap();
     assert!(
-        output_content.contains("authorizations:"),
+        output_content.contains("service_items:"),
         "Output should contain YAML format"
     );
 
@@ -129,10 +129,10 @@ fn test_convert_preserves_data() {
     let original_config = ConfigLoader::load_config_from_path(input_file).unwrap();
     let converted_config = ConfigLoader::load_config_from_path(output_file).unwrap();
 
-    assert_eq!(
-        original_config.authorizations.len(),
-        converted_config.authorizations.len(),
-        "Should preserve number of authorizations"
+    assert!(original_config.authorizations.is_empty());
+    assert!(
+        converted_config.authorizations.is_empty(),
+        "legacy credential metadata must be dropped during conversion"
     );
     assert_eq!(
         original_config.service_items.len(),

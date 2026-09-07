@@ -8,10 +8,11 @@ use crate::server::ServerConfig;
 use crate::shared::error::{CallerError, ErrorCategory};
 use axum::{
     Router,
+    body::Bytes,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, Method, StatusCode, header},
     response::{Html, IntoResponse, Json},
-    routing::get,
+    routing::{any, get},
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -20,9 +21,9 @@ use tower_http::cors::{Any, CorsLayer};
 
 /// Server state
 #[derive(Clone)]
-pub struct AppState {
-    pub caller: Caller,
-    pub server_config: ServerConfig,
+pub(crate) struct AppState {
+    pub(crate) caller: Caller,
+    pub(crate) server_config: ServerConfig,
 }
 
 /// Start the API documentation server
@@ -36,41 +37,39 @@ pub async fn start_server_with_caller(
     config: ServerConfig,
     caller: Caller,
 ) -> Result<(), CallerError> {
+    config.validate()?;
+
     let state = Arc::new(AppState {
         caller,
         server_config: config.clone(),
     });
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/", get(index))
-        .route("/openapi.json", get(openapi_json))
-        .route("/proxy/{service}/{method}", get(proxy_handler_path))
-        .route("/proxy", get(proxy_handler_query))
-        .layer(
+        .route("/openapi.json", get(openapi_json));
+    if config.enable_proxy {
+        app = app
+            .route("/proxy/{service}/{method}", any(proxy_handler_path))
+            .route("/proxy", any(proxy_handler_query));
+    }
+    if config.allow_any_origin {
+        app = app.layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
                 .allow_headers(Any),
-        )
-        .with_state(state);
+        );
+    }
+    let app = app.with_state(state);
 
     let addr = config.addr;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .map_err(|e| CallerError::IoError(format!("Failed to bind to {}: {}", addr, e)))?;
-
-    println!("🚀 Caller API Server running at http://{}", addr);
-    println!("📖 Swagger UI: http://{}/", addr);
-    println!("📄 OpenAPI JSON: http://{}/openapi.json", addr);
-    println!(
-        "🔄 Proxy: http://{}/proxy/{{service}}/{{method}}?id=VALUE",
-        addr
-    );
-    println!("💡 Swagger UI 'Try it out' requests will go through caller proxy!");
+        .map_err(|error| CallerError::io(format!("binding server to {addr}"), error))?;
 
     axum::serve(listener, app)
         .await
-        .map_err(|e| CallerError::IoError(format!("Server error: {}", e)))?;
+        .map_err(|error| CallerError::io("serving HTTP requests", error))?;
 
     Ok(())
 }
@@ -90,7 +89,7 @@ async fn openapi_json(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             let doc = generator
                 .title(&state.server_config.title)
                 .version(&state.server_config.version)
-                .proxy_mode(true)
+                .proxy_mode(state.server_config.enable_proxy)
                 .proxy_url(&proxy_url)
                 .generate();
             Json(doc).into_response()
@@ -115,16 +114,24 @@ struct ProxyParams {
 
 /// Proxy handler - path style: /proxy/{service}/{method}
 async fn proxy_handler_path(
+    incoming_method: Method,
     State(state): State<Arc<AppState>>,
     Path((service, method)): Path<(String, String)>,
     Query(params): Query<ProxyParams>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
     execute_proxy(
         &state,
-        &service,
-        &method,
-        params.id.as_deref(),
-        &params.extra,
+        ProxyRequest {
+            service_name: &service,
+            method_name: &method,
+            id: params.id.as_deref(),
+            extra_params: &params.extra,
+            incoming_method: &incoming_method,
+            headers: &headers,
+            body: &body,
+        },
     )
     .await
 }
@@ -140,27 +147,51 @@ struct ProxyQueryParams {
 }
 
 async fn proxy_handler_query(
+    incoming_method: Method,
     State(state): State<Arc<AppState>>,
     Query(params): Query<ProxyQueryParams>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
     execute_proxy(
         &state,
-        &params.service,
-        &params.method,
-        params.id.as_deref(),
-        &params.extra,
+        ProxyRequest {
+            service_name: &params.service,
+            method_name: &params.method,
+            id: params.id.as_deref(),
+            extra_params: &params.extra,
+            incoming_method: &incoming_method,
+            headers: &headers,
+            body: &body,
+        },
     )
     .await
+}
+
+struct ProxyRequest<'a> {
+    service_name: &'a str,
+    method_name: &'a str,
+    id: Option<&'a str>,
+    extra_params: &'a HashMap<String, String>,
+    incoming_method: &'a Method,
+    headers: &'a HeaderMap,
+    body: &'a [u8],
 }
 
 /// Execute proxy request
 async fn execute_proxy(
     state: &Arc<AppState>,
-    service_name: &str,
-    method_name: &str,
-    id: Option<&str>,
-    extra_params: &HashMap<String, String>,
+    request: ProxyRequest<'_>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    let ProxyRequest {
+        service_name,
+        method_name,
+        id,
+        extra_params,
+        incoming_method,
+        headers,
+        body,
+    } = request;
     let config = match state.caller.config() {
         Ok(config) => config,
         Err(err) => {
@@ -201,6 +232,19 @@ async fn execute_proxy(
         }
     };
 
+    if api_config.http_method.as_str() != incoming_method.as_str() {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(serde_json::json!({
+                "error": format!(
+                    "method '{}' requires HTTP {}",
+                    method_name,
+                    api_config.http_method.as_str()
+                )
+            })),
+        );
+    }
+
     let mut params = extra_params.clone();
     if let Some(id) = id
         && let Some(path_param) = first_path_param(api_config)
@@ -209,22 +253,79 @@ async fn execute_proxy(
     }
 
     let method = format!("{}.{}", service_name, method_name);
-    let params = if params.is_empty() {
-        None
-    } else {
-        Some(params)
+    let param_types = match api_config.param_types() {
+        Ok(param_types) => param_types,
+        Err(error) => return proxy_error_response(error),
     };
+    let mut args = crate::RequestArgs::new();
+    if param_types.contains(&crate::ParamType::Path) {
+        let mut path_params = HashMap::new();
+        for name in path_param_names(api_config) {
+            if let Some(value) = params.remove(&name) {
+                path_params.insert(name, value);
+            }
+        }
+        args = args.with_path(crate::CallParams::from_hashmap(path_params));
+    }
 
-    match state.caller.call(&method, params).await {
+    if param_types.contains(&crate::ParamType::Query) {
+        args = args.with_query(crate::CallParams::from_hashmap(std::mem::take(&mut params)));
+    }
+
+    if param_types.contains(&crate::ParamType::Form) {
+        let mut form_params = std::mem::take(&mut params);
+        if !body.is_empty() {
+            let content_type = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if !content_type.starts_with("application/x-www-form-urlencoded") {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    Json(serde_json::json!({
+                        "error": "form endpoints require application/x-www-form-urlencoded"
+                    })),
+                );
+            }
+            form_params.extend(form_urlencoded::parse(body).into_owned());
+        }
+        args = args.with_form(crate::CallParams::from_hashmap(form_params));
+    }
+
+    if param_types.contains(&crate::ParamType::Json) {
+        let json = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            match serde_json::from_slice(body) {
+                Ok(value) => value,
+                Err(error) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": error.to_string() })),
+                    );
+                }
+            }
+        };
+        args = args.with_json(json);
+    }
+
+    if !params.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("unexpected parameters: {:?}", params.keys().collect::<Vec<_>>())
+            })),
+        );
+    }
+
+    let result = state.caller.call_args(&method, args).await;
+
+    match result {
         Ok(result) => match result.body {
             ResponseBody::Json(json) => (result.status_code, Json(json)),
             ResponseBody::Text(text) => (
                 result.status_code,
                 Json(serde_json::json!({ "response": text })),
-            ),
-            ResponseBody::Bytes(bytes) => (
-                result.status_code,
-                Json(serde_json::json!({ "bytes": bytes.len() })),
             ),
         },
         Err(err) => proxy_error_response(err),
@@ -232,7 +333,12 @@ async fn execute_proxy(
 }
 
 fn first_path_param(api_config: &ApiConfig) -> Option<String> {
+    path_param_names(api_config).into_iter().next()
+}
+
+fn path_param_names(api_config: &ApiConfig) -> Vec<String> {
     let mut chars = api_config.url.chars();
+    let mut names = Vec::new();
 
     while let Some(c) = chars.next() {
         if c != '{' {
@@ -242,13 +348,16 @@ fn first_path_param(api_config: &ApiConfig) -> Option<String> {
         let mut name = String::new();
         for c in chars.by_ref() {
             if c == '}' {
-                return (!name.is_empty()).then_some(name);
+                if !name.is_empty() {
+                    names.push(name);
+                }
+                break;
             }
             name.push(c);
         }
     }
 
-    None
+    names
 }
 
 fn proxy_error_response(err: CallerError) -> (StatusCode, Json<serde_json::Value>) {

@@ -19,30 +19,33 @@ pub struct OpenApiGenerator {
     proxy_mode: bool,
     /// Proxy server URL (used when proxy_mode is true)
     proxy_url: String,
+    security_schemes: HashMap<String, SecurityScheme>,
 }
 
 impl OpenApiGenerator {
     /// Create a new generator from loaded configuration
-    pub fn new(config: CallerConfig) -> Self {
-        Self {
+    pub fn new(config: CallerConfig) -> Result<Self, CallerError> {
+        config.validate()?;
+        Ok(Self {
             config,
             title: "Caller API".to_string(),
             version: "1.0.0".to_string(),
             description: None,
             proxy_mode: false,
             proxy_url: "http://127.0.0.1:8080".to_string(),
-        }
+            security_schemes: HashMap::new(),
+        })
     }
 
     /// Create generator from configuration file
     pub fn from_config_file() -> Result<Self, CallerError> {
         let config = ConfigLoader::get_full_config()?;
-        Ok(Self::new(config))
+        Self::new(config)
     }
 
     /// Create generator from a [`Caller`] instance.
     pub fn from_caller(caller: &Caller) -> Result<Self, CallerError> {
-        Ok(Self::new(caller.config()?))
+        Self::new(caller.config()?)
     }
 
     /// Set API title
@@ -76,12 +79,21 @@ impl OpenApiGenerator {
         self
     }
 
+    /// Define how a configured authentication provider is represented in OpenAPI.
+    ///
+    /// Runtime authenticators are arbitrary Rust code, so the generator cannot
+    /// reliably infer whether a provider is bearer, basic, or API-key based.
+    pub fn security_scheme(mut self, auth_type: impl Into<String>, scheme: SecurityScheme) -> Self {
+        self.security_schemes.insert(auth_type.into(), scheme);
+        self
+    }
+
     /// Generate OpenAPI document
     pub fn generate(&self) -> OpenApiDoc {
         let mut paths = HashMap::new();
         let mut servers = Vec::new();
         let mut tags = Vec::new();
-        let mut security_schemes = HashMap::new();
+        let mut security_schemes = self.security_schemes.clone();
 
         if self.proxy_mode {
             // In proxy mode, use local server
@@ -129,6 +141,8 @@ impl OpenApiGenerator {
                     put: None,
                     delete: None,
                     patch: None,
+                    head: None,
+                    options: None,
                     parameters: Vec::new(),
                     servers: None,
                 });
@@ -141,6 +155,8 @@ impl OpenApiGenerator {
                         "put" => path_item.put = Some(operation),
                         "delete" => path_item.delete = Some(operation),
                         "patch" => path_item.patch = Some(operation),
+                        "head" => path_item.head = Some(operation),
+                        "options" => path_item.options = Some(operation),
                         _ => {}
                     }
                 }
@@ -148,10 +164,26 @@ impl OpenApiGenerator {
 
             // Add security scheme if service has auth
             if let Some(auth_type) = &service.authorization_type {
-                security_schemes.insert(
-                    auth_type.clone(),
-                    SecurityScheme::bearer().description(&format!("{} authentication", auth_type)),
-                );
+                security_schemes
+                    .entry(auth_type.clone())
+                    .or_insert_with(|| {
+                        SecurityScheme::bearer().description(&format!(
+                            "Placeholder for runtime provider '{}'; override it when the provider is not bearer authentication",
+                            auth_type
+                        ))
+                    });
+            }
+            for api in &service.api_items {
+                if let Some(auth_type) = &api.authorization_type {
+                    security_schemes
+                        .entry(auth_type.clone())
+                        .or_insert_with(|| {
+                            SecurityScheme::bearer().description(&format!(
+                                "Placeholder for runtime provider '{}'; override it when the provider is not bearer authentication",
+                                auth_type
+                            ))
+                        });
+                }
             }
         }
 
@@ -200,7 +232,11 @@ impl OpenApiGenerator {
         for param in path_params {
             parameters.push(Parameter {
                 name: param.clone(),
-                location: "path".to_string(),
+                location: if self.proxy_mode {
+                    "query".to_string()
+                } else {
+                    "path".to_string()
+                },
                 description: Some(format!("Path parameter: {}", param)),
                 required: Some(true),
                 schema: Some(Schema::string()),
@@ -223,10 +259,15 @@ impl OpenApiGenerator {
 
         // Add request body if json or form type
         if param_types.contains(&ParamType::Json) {
+            let content_type = api_config
+                .content_type
+                .as_deref()
+                .unwrap_or("application/json")
+                .to_string();
             request_body = Some(RequestBody {
                 description: Some("Request body".to_string()),
                 content: HashMap::from([(
-                    "application/json".to_string(),
+                    content_type,
                     MediaType {
                         schema: Some(Schema::object().description("Request body as JSON object")),
                         example: Some(serde_json::json!({"key": "value"})),
@@ -236,10 +277,15 @@ impl OpenApiGenerator {
                 required: Some(true),
             });
         } else if param_types.contains(&ParamType::Form) {
+            let content_type = api_config
+                .content_type
+                .as_deref()
+                .unwrap_or("application/x-www-form-urlencoded")
+                .to_string();
             request_body = Some(RequestBody {
                 description: Some("Form data".to_string()),
                 content: HashMap::from([(
-                    "application/x-www-form-urlencoded".to_string(),
+                    content_type,
                     MediaType {
                         schema: Some(Schema::object().description("Form data")),
                         example: None,
@@ -328,7 +374,7 @@ impl OpenApiGenerator {
     /// Generate OpenAPI YAML string
     pub fn to_yaml(&self) -> Result<String, CallerError> {
         let doc = self.generate();
-        serde_yaml::to_string(&doc)
+        serde_yaml_ng::to_string(&doc)
             .map_err(|e| CallerError::JsonError(format!("Failed to serialize OpenAPI: {}", e)))
     }
 }
@@ -399,6 +445,7 @@ mod tests {
     fn test_generate_openapi() {
         let config = create_test_config();
         let generator = OpenApiGenerator::new(config)
+            .unwrap()
             .title("Test API")
             .version("1.0.0");
 
@@ -412,7 +459,7 @@ mod tests {
     #[test]
     fn test_to_json() {
         let config = create_test_config();
-        let generator = OpenApiGenerator::new(config);
+        let generator = OpenApiGenerator::new(config).unwrap();
         let json = generator.to_json().unwrap();
         assert!(json.contains("\"openapi\""));
         assert!(json.contains("\"paths\""));
@@ -421,7 +468,7 @@ mod tests {
     #[test]
     fn test_extract_path_params() {
         let config = create_test_config();
-        let generator = OpenApiGenerator::new(config);
+        let generator = OpenApiGenerator::new(config).unwrap();
 
         let params = generator.extract_path_params("/items/{id}");
         assert_eq!(params, vec!["id"]);

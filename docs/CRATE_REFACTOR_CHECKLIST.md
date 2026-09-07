@@ -1,248 +1,170 @@
-# Caller 重构清单：2026-04 现状复检版
+# `caller` 0.4 成熟度与发布基线
 
-这份清单不再只是“理想目标列表”，而是基于当前仓库状态做过一次重新检测后的真实状态记录。
+更新时间：2026-09-07
 
-本次复检参考了以下事实：
+本文记录 0.4 系列的能力边界、稳定性约定和发布门槛。它不是功能愿望清单，
+而是维护者在改动公共 API、协议行为或发布配置时应执行的检查基线。
 
-- `cargo test --lib` 通过
-- `cargo check --all-targets` 通过
-- `cargo check --features server --all-targets` 通过
-- `cargo check --examples` 通过
-- `cargo test --doc` 通过
-- `cargo clippy --all-targets -- -D warnings` 通过
-- `cargo clippy --features server --all-targets -- -D warnings` 通过
-- `cargo package --allow-dirty --list` 已复检发布包内容
-- 默认 `cargo test` 已不再强依赖外网；外网测试已标记 `#[ignore = "requires external network access"]`
+## 定位
 
-目标仍然是把 `caller` 从“可用工具库”继续打磨成“稳定、可组合、可测试、可发布”的 Rust crate，但当前文档应反映哪些工作已经完成，哪些还只是部分完成，哪些是下一阶段重点。
+`caller` 是配置驱动的异步 HTTP 客户端，适用于应用需要集中描述一组固定上游
+API 的场景。它的稳定核心是：
 
-## 总体判断
+- 一个 `Caller` 实例持有配置、认证 provider、middleware 和复用的
+  `reqwest::Client`；
+- `RequestArgs` 明确分离 path、query、form 和 JSON body；
+- 配置在加载或构建阶段校验，运行时依赖（例如认证 provider）在发送前校验；
+- 请求、重试、响应限制、下载、OpenAPI 和可选开发代理复用同一套配置语义；
+- 默认功能不依赖 OpenSSL，`server` 能力通过 feature 隔离。
 
-当前 crate 已经明显越过“原型期”：
+它不是通用浏览器客户端、流式传输框架或生产 API Gateway。需要动态 URL、
+multipart、SSE、WebSocket、零拷贝大文件流或网关级治理时，应直接使用
+`reqwest`、专用协议库或生产网关。
 
-- 已有正式的实例化入口 `Caller` / `CallerBuilder`
-- 全局 API 已通过实例模型委托，而不是继续以旧的全局执行路径为核心
-- 认证缺失时默认 fail fast，不再静默降级
-- `ApiResult` 已支持非 JSON 响应，不再强制 JSON-only
-- 关键错误已经开始结构化，并提供 `ErrorCategory`
-- 离线测试、doc tests、examples 编译检查已建立基本基线
+## 0.4 稳定性约定
 
-本轮持续优化后，原清单中的问题项已经完成收口：
+### 请求语义
 
-- 公开 API 面已经收紧到 crate root 稳定导出
-- 配置模型底层已经类型化，同时保持现有配置文件格式兼容
-- 配置合法性校验已经前移到 parse / build 阶段
-- `CallerBuilder` 已覆盖实例默认值、header、user-agent、auth provider 与自定义 client
-- `server` feature 已复用 `Caller` 实例执行路径，并且模块本身不再暴露为公共目录结构
+- 方法名格式固定为 `service.api`。
+- 支持 GET、POST、PUT、DELETE、PATCH、HEAD 和 OPTIONS。
+- service `base_url` 只能使用 HTTP(S)，不能包含凭据、query 或 fragment。
+- endpoint URL 为空时表示 service root；非空时必须以 `/` 开头。
+- path 参数按单个 path segment 百分号编码，不能改变既定路径层级。
+- `RequestArgs` 是组合参数类型的推荐入口；未在 endpoint 声明的位置不接受参数。
+- query/form pair API 保留重复 key 和输入顺序。
+- JSON body 接收任意 `serde_json::Value`；`CallParams` 保留整数宽度，并拒绝
+  JSON 无法表示的非有限浮点数。
+- 兼容入口 `call` / `call_params` 会把同一组参数投射到 endpoint 声明的所有
+  参数位置。该行为仅为兼容保留，新代码不应依赖它表达组合请求。
 
-## 状态分层
+### 失败与重试语义
 
-### 已完成
+- 配置、协议、安全和运行时失败可通过 `ErrorCategory` 分类。
+- HTTP 传输失败保留原始 `reqwest::Error` 作为 source，并提供
+  `TransportErrorKind`。
+- 收到 4xx/5xx 本身仍是成功收到响应；调用方可显式调用
+  `ApiResult::error_for_status()` 转换为 `CallerError::HttpStatus`。
+- 重试只覆盖配置的状态码和真实传输错误。认证、配置、参数及 middleware 拒绝
+  不会被当作网络抖动重试。
+- 达到重试上限时返回最后一次真实结果：状态码响应仍为 `Ok(ApiResult)`，传输
+  失败则保留并返回最后一个 `HttpTransport`。
+- 指数退避使用溢出安全计算，默认含 20% 正向抖动；整数秒格式的
+  `Retry-After` 会被采用，但不超过 `max_delay`。
 
-#### P0 当前明确错误
+### 安全与资源边界
 
-- `init_config()` 语义已修复。
-  现在会真正加载并写入全局配置状态，且已有回归测试覆盖。
-- 配置热重载链路已修复。
-  文件变更后可触发实际 reload，已有自动化测试覆盖配置变更生效。
-- 认证静默降级已修复。
-  当配置声明 `authorization_type` 但 provider 未注册时，会返回结构化错误 `UnknownAuthProvider { name }`。
-- README / examples / doc tests 基本一致性已大幅改善。
-  当前 `cargo check --examples` 和 `cargo test --doc` 可通过。
+- 配置中的旧 `authorizations` 字段只为输入兼容而接受，加载后立即丢弃，序列化
+  时不会输出。凭据必须通过运行时 provider 注入。
+- 内置认证类型的 `Debug` 不输出 token、密码或 API key。
+- 动态认证 provider 可以返回刷新错误；缺失环境变量不会退化为空凭据。
+- 普通响应和下载分别有可配置的累计字节上限，既检查 `Content-Length`，也在
+  逐块读取时检查实际长度。
+- 自动下载文件名拒绝绝对路径、路径分隔符、控制字符及 `.` / `..`，并以
+  `create_new` 创建文件，避免路径穿越和静默覆盖。
+- `save_to_file` 是调用方显式指定路径的低层接口，仍具有覆盖已有文件的语义。
+- 开发服务器默认只绑定回环地址且不开放任意 CORS；远程绑定必须显式允许。
 
-#### P1 架构核心
+### 并发与全局状态
 
-- 已引入实例化 API：
-  `Caller::from_path(path)`、`Caller::from_config(config)`、`Caller::builder()`
-- 每个 `Caller` 实例已持有自己的：
-  配置、认证 provider 集合、复用的 `reqwest::Client`
-- 多实例隔离已有测试覆盖。
-- HTTP client 已从“每次请求新建”改为“实例级复用”。
-- `server` 代理请求路径已改为委托 `Caller::call`，不再维护第二套独立 HTTP 执行逻辑。
+- 推荐每个应用或上游域持有长生命周期 `Caller` 实例。
+- 一个实例的配置、认证和 middleware 与其他实例隔离。
+- 认证注册表与配置加载关键路径使用锁保护；可失败操作通过结构化错误报告锁中毒。
+  watch 的停止/状态查询保持无失败接口，并只在这些观察型操作中恢复锁内数据。
+- crate-root 全局函数用于脚本和单一全局配置场景。它们依赖进程级配置状态，
+  不适合作为多租户隔离边界。
 
-#### P2 公开 API 设计
+## 已完成的发布级收口
 
-- 已提供 builder 风格入口。
-- `CallerBuilder` 现已支持一批实例级默认装配能力：
-  默认 timeout、默认 header、自定义 user-agent、构建时预注册 auth provider
-- `ConfigBuilder` / `ServiceBuilder` 已开始提供 typed config 入口：
-  `api_typed(...)` 与 `ApiEndpointBuilder`
-- `ApiResult` 已不再隐含“响应必须是 JSON”这一前提。
-  现在已有 `ResponseBody::Json` / `Text` / `Bytes` 类型表达。
+- 公共 API 从 crate root 导出，内部目录结构不作为兼容承诺。
+- crate 级 `missing_docs` 与 `unreachable_pub` lint 已启用，docs.rs 可见接口必须有
+  rustdoc，内部 `pub` 不会再被误当作公共兼容面。
+- JSON、YAML、TOML 共用一个 `ConfigFormat`，旧名称仅作为类型别名兼容。
+- 配置模型拒绝未知字段、重复 service/API、非法名称、零 timeout、非法 method、
+  冲突参数类型、非法 URL 和 path placeholder 不一致。
+- endpoint timeout 优先于 service timeout，service timeout 优先于 caller 默认值。
+- middleware 完整包裹每次 attempt，响应阶段按注册逆序展开，错误钩子不吞异常。
+- circuit breaker 在 half-open 状态只允许一个探测请求；本地配置/认证错误不计入
+  上游失败，非目标失败状态会重置连续失败计数。
+- OpenAPI 覆盖所有支持的方法，可依据配置生成认证引用，并允许调用方覆盖具体
+  `SecurityScheme`。
+- `reqwest` 使用 rustls 和受限 feature；Tokio 不启用 `full`；服务端依赖均为
+  optional。
+- 默认测试不访问公网；协议测试使用本地 TCP server 覆盖编码、重复 query、
+  JSON body、超限响应和 `Retry-After`。
+- 已声明 MSRV 为 Rust 1.88，CI 同时检查 MSRV 与 stable。
 
-#### P3 错误模型与安全默认值
+## 有意保留的限制
 
-- 已引入一批结构化错误：
-  `ServiceNotFound { service }`
-  `ApiNotFound { service, method }`
-  `MissingPathParameter { name }`
-  `UnknownAuthProvider { name }`
-  `UnsupportedParamType { value }`
-- 已补充配置层结构化错误：
-  `ConfigFileNotFound`
-  `UnsupportedConfigFormat`
-  `ConfigParseError`
-  `ConfigSerializeError`
-  `ConfigWatchError`
-  `LockPoisoned`
-- 已提供 `ErrorCategory`，可做基础分层：
-  `Config` / `Runtime` / `Protocol` / `Security`
-- 默认行为已比之前保守得多：
-  缺配置、缺认证、缺路径参数等情况都不会继续“带病请求”。
+以下不是 0.4 的未完成 bug，而是需要新设计和相应 semver 评估的能力：
 
-#### P4 测试体系
+1. 响应和下载最终仍完整保存在内存中。字节上限能阻止无界增长，但不能替代
+   流式写盘；大对象下载应等待独立 streaming API。
+2. 尚无 multipart、流式 request body、SSE 或 WebSocket API。
+3. 自动重试没有内置幂等键，也不会判断 POST 是否业务幂等。调用方必须谨慎配置
+   非幂等方法的重试状态码。
+4. OpenAPI 无法从字符串配置推导完整 JSON Schema；生成的 body/response schema
+   是通用结构。认证 scheme 也需要在运行时通过 `security_scheme` 精确覆盖。
+5. 开发代理没有用户认证、限流、TLS 终止或审计能力，不应部署为公网网关。
+6. 配置热重载监控单个文件路径，不负责 Kubernetes ConfigMap 的目录级原子切换
+   等所有部署模式；生产环境应按实际挂载行为做集成验证。
+7. `need_cache`、`cache_time` 和 `use_new_http_client` 仅为旧配置反序列化兼容，
+   当前无运行时行为。新配置不应写入这些字段。
 
-- 默认测试已可离线运行。
-- 外网测试已隔离为 `ignored`。
-- 已加入：
-  库内单元测试
-  多格式配置测试
-  doc tests
-  examples 编译检查
-  已知 bug 回归测试
-- 严格 clippy 已纳入当前复检基线。
+## 0.4 破坏性变更检查
 
-### 已收口项目
+0.4 相对早期版本收紧了错误和构建接口，升级时重点检查：
 
-#### P2 收紧公开模块边界
+- `ApiResult::build` 返回 `ApiResult`，不再返回无意义的 `Result`；
+- `DownloadResult::from_response` 同样直接返回值，不再返回无意义的 `Result`；
+- `CallParams::to_json`、`json_params!` 会报告非有限浮点数等转换错误；
+- `HeaderMiddleware::with_header`、`RequestContext::with_header` 和
+  `CircuitBreakerMiddleware::with_config` 返回 `Result`；
+- `AuthRegistry::get` / `contains`、`Caller::has_auth` 和全局 `has_auth` 返回
+  `Result`，使锁故障不再伪装成“未找到”；
+- `OpenApiGenerator::new` 会先校验配置并返回 `Result`；
+- `ServiceBuilder::api` 返回 `Result`，不存在的 service 不再 panic；
+- `ConfigLoader::init_with_config` 返回 `Result`；
+- 旧的字符串化 HTTP/网络错误已合并为带 source 的 `HttpTransport`；
+- 无实际行为的 `RetryMiddleware` 已移除，重试必须使用
+  `call_*_with_retry`。
 
-- `core` / `infra` 已改为 `pub(crate)`
-- `client` / `config` / `domain` / `openapi` / `server` 均已改为内部模块
-- 稳定公共 API 通过 crate root 导出：
-  `Caller`、`CallerBuilder`、`ConfigBuilder`、`ConfigLoader`、`ApiConfig`、`CallerConfig`、`OpenApiGenerator`、`ServerConfig` 等
-- 文档、examples、tests 已改为使用 crate root 稳定路径
+## 发布门槛
 
-结论：公共模块边界已经收口，不再暴露内部目录结构作为稳定 API。
-
-#### P2 明确同步 / 异步边界
-
-- `call` / `call_with_retry` / `download` 是明确 async 的
-- 配置加载、转换、watch 管理接口是同步的
-- crate docs 已说明新代码优先使用实例 API，全局 API 用于简单场景
-- `watch_config` / `watch_config_with_debounce` 已在 crate docs 中说明默认路径和 debounce 行为
-
-结论：同步 / 异步边界和全局 / 实例职责边界已经清楚表达。
-
-#### P3 错误分层
-
-- 已有结构化错误和 `ErrorCategory`
-- HTTP / 网络路径已补充：
-  `RequestTimeout`
-  `TooManyRedirects { message }`
-  `ConnectionError { message }`
-  `HttpClientBuildError { message }`
-  `RetryableHttpStatus { status, attempt, max_retries }`
-  `RetryAttemptsExhausted`
-- builder 参数错误已补充：
-  `InvalidHeaderName { name, message }`
-  `InvalidHeaderValue { name, message }`
-  `InvalidUserAgent { value, message }`
-- URL 错误已补充：
-  `InvalidUrl { url, message }`
-  `UnsupportedUrlScheme { url, scheme }`
-- 认证环境变量错误已补充：
-  `MissingAuthEnvironmentVariable { name }`
-
-结论：原清单列出的 HTTP / 参数 / 认证类字符串错误已拆出可匹配结构化路径；兼容性保留的泛化错误变体不再是当前执行路径的主要表达。
-
-#### P5 配置大小写与格式规则
-
-- JSON / YAML / TOML 多格式读写都已建立
-- 示例配置可跨格式互转
-- `ApiConfig` 内部字段已经类型化：
-  `http_method: HttpMethod`
-  `param_type: Vec<ParamType>`
-- serde 仍保持外部配置格式兼容：
-  `http_method = "GET"`
-  `param_type = "path,json"`
-- endpoint `url` 规则已明确：
-  空字符串代表 service root；非空必须以 `/` 开头
-
-结论：配置文件格式保持兼容，Rust 内部表达已经类型化，字段规则已定型。
-
-#### P6 Feature 与依赖边界
-
-- `tokio` 已不再使用 `full`，而是收紧为当前实际需要的特性集：
-  `macros` / `rt-multi-thread` / `time` / `net`
-- `reqwest` 已不再使用默认特性，改为：
-  `default-features = false`
-  `json`
-  `rustls-tls`
-- `cargo tree -i native-tls` 已确认 native-tls 不再进入依赖树
-- `server` feature 下的代理执行路径已复用 `Caller` 实例能力：
-  auth provider、参数处理、timeout、复用 HTTP client 等逻辑不再在 server 中重复实现
-- `server` 模块本身已经内部化，只保留 crate root 的 feature-gated 函数导出
-
-结论：feature 和依赖边界已按当前能力收紧。
-
-#### P7 发布元数据成熟度
-
-- `Cargo.toml` 已补充：
-  `documentation`
-  `keywords`
-  `categories`
-  `exclude`
-- 发布包内容已做过一次 `cargo package --allow-dirty --list` 复检
-- `.vscode/` 与根目录未引用的 `api_result_test.json` 已从发布包排除
-- examples、samples、integration tests 与测试夹具保留在发布包中，作为 crate 使用示例和回归基线
-- `Cargo.toml.orig` 出现在 `cargo package --list` 预览中，这是 Cargo 生成的打包辅助文件，不是仓库待清理文件
-
-结论：发布元数据和包内容已经按当前发布策略收口。
-
-#### P5 用类型代替字符串协议
-
-- `ApiConfig` 底层存储已升级为：
-  `HttpMethod`
-  `Vec<ParamType>`
-- JSON / YAML / TOML 配置文件继续以字符串形式读写，保持向后兼容
-- `ApiConfig` 已提供：
-  `http_method()`
-  `param_types()`
-  `has_param_type()`
-  `validate()`
-- `ConfigBuilder` / `ServiceBuilder` / `ApiEndpointBuilder` 已写入类型化字段
-- `client` / `openapi` / `server` 的关键执行路径使用类型化配置
-
-结论：类型化配置模型已完成，外部字符串格式只是 serde 兼容层。
-
-#### P5 配置加载阶段即做完整校验
-
-- `ConfigLoader` 在 parse 后已执行配置校验
-- `Caller::from_config` / `CallerBuilder::build()` 也会校验传入配置
-- 当前已前移的校验包括：
-  非法 `http_method`
-  非法 `param_type`
-  `none` 与其他参数类型的非法组合
-  重复 `param_type` 组合，例如 `query,query`
-  非法或非 HTTP(S) `base_url`
-  非空 API endpoint `url` 必须以 `/` 开头
-  由 `base_url + api.url` 组成后的非法请求 URL
-  service / api 重名冲突
-- 非法 `http_method` / `param_type` 在 serde parse 阶段即失败
-- `query,json` 这类组合语义作为稳定能力保留；`none` 不能与其他类型组合，重复类型会失败
-- 认证 provider 引用需要结合运行时注册表判断，因此保持在 `Caller::call` 时 fail fast，返回 `UnknownAuthProvider { name }`
-
-结论：配置加载阶段校验已完成；必须依赖运行时注册表的信息保留为运行时 fail-fast。
-
-## 建议保留的回归基线
-
-后续每次继续重构时，至少应保持以下命令持续通过：
+每次发布必须在干净或明确审阅过的工作树上运行：
 
 ```bash
-cargo test --lib
-cargo check --examples
+cargo fmt --all -- --check
+cargo check --all-features --all-targets
+cargo +1.88.0 check --all-features --all-targets
+cargo clippy --all-features --all-targets -- -D warnings
+cargo test --all-features --all-targets
 cargo test --doc
+RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
+cargo package --allow-dirty
 ```
 
-另外建议把外网测试继续保持为显式隔离，不要重新混回默认测试集。
+还应人工确认：
+
+- `cargo package --allow-dirty --list` 没有凭据、下载产物或编辑器缓存；
+- README、CHANGELOG、crate 版本、MSRV 和 feature 表述一致；
+- 所有外网测试继续保持 `#[ignore = "requires external network access"]`；
+- 公共 API 变更符合 semver，并在 CHANGELOG 的 migration notes 中列出；
+- 生产使用方已评估响应上限、timeout、重试幂等性和 server 暴露范围。
+
+## 后续演进优先级
+
+如果继续扩展，推荐依次处理：
+
+1. 设计不破坏现有缓冲 API 的 streaming response/download 接口；
+2. 增加 multipart 和流式 request body，但避免把配置模型变成协议万能层；
+3. 为 tracing/metrics 提供可选集成，保持默认依赖轻量；
+4. 增加基于 API snapshot 的公共接口兼容检查；
+5. 在确有用户场景后再评估异步 auth registry、DNS/连接池调优或更复杂的
+   retry budget，不预先引入重量级抽象。
 
 ## 当前结论
 
-`caller` 已经完成了第一轮最关键的架构和安全性修正。
-
-现在最需要的不是再补一堆零散功能，而是继续做两类“会改变长期质量上限”的工作：
-
-- 让配置模型真正类型化
-- 让公开 API 边界和 feature 边界真正稳定
-
-换句话说，当前 crate 的主要问题已经不再是“明显 bug 很多”，而是“成熟度还不够彻底”。
+在“配置驱动、缓冲式 HTTP 请求组件”这一明确边界内，0.4 已具备可发布候选所需
+的配置校验、错误可观测性、安全默认值、资源上限、离线协议测试、MSRV 和发布
+检查。其成熟度依赖上述边界保持清晰；将开发代理或内存下载误当作生产网关和
+流式传输能力，不属于当前稳定承诺。

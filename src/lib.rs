@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(unreachable_pub)]
+
 //! `caller` is a configurable Web API calling crate with both instance-based
 //! and global entry points.
 //!
@@ -64,17 +67,18 @@ mod client;
 mod config;
 pub(crate) mod core;
 mod domain;
-pub(crate) mod infra;
-pub mod openapi;
-pub mod params;
-pub mod server;
+mod openapi;
+mod params;
+mod server;
 mod shared;
 
 // Stable crate-root API
 pub use client::{Caller, CallerBuilder};
-pub use config::config_builder::ConfigFormat as BuilderConfigFormat;
-pub use config::config_loader::ConfigFormat as ConfigFileFormat;
-pub use config::{ApiEndpointBuilder, ConfigBuilder, ConfigLoader, ServiceBuilder, run_config_cli};
+pub use config::ConfigFormat as BuilderConfigFormat;
+pub use config::ConfigFormat as ConfigFileFormat;
+pub use config::{
+    ApiEndpointBuilder, ConfigBuilder, ConfigFormat, ConfigLoader, ServiceBuilder, run_config_cli,
+};
 pub use domain::auth_registry::AuthRegistry;
 pub use domain::auth_trait::{AuthContext, AuthProvider, Authenticator};
 pub use domain::builtin_auth::{
@@ -88,12 +92,12 @@ pub use domain::{
 pub use domain::{
     CircuitBreakerConfig, CircuitBreakerMiddleware, CircuitBreakerStats, HeaderMiddleware,
     LoggingMiddleware, Middleware, MiddlewareChain, RequestContext, ResponseContext,
-    RetryMiddleware, TimingMiddleware, UserAgentMiddleware,
+    TimingMiddleware, UserAgentMiddleware,
 };
-pub use openapi::{OpenApiDoc, OpenApiGenerator};
+pub use openapi::{OpenApiDoc, OpenApiGenerator, SecurityScheme};
 pub use params::*;
 pub use server::ServerConfig;
-pub use shared::error::{CallerError, ErrorCategory};
+pub use shared::error::{CallerError, ErrorCategory, TransportErrorKind};
 
 #[cfg(feature = "server")]
 pub use server::{start_server, start_server_with_caller};
@@ -138,7 +142,17 @@ pub async fn call_params(
     method: &str,
     params: Option<CallParams>,
 ) -> Result<domain::api_result::ApiResult, CallerError> {
-    call(method, params.map(|p| p.to_hashmap())).await
+    global_caller()?.call_params(method, params).await
+}
+
+/// Call an API with path, query, form, and JSON values separated explicitly.
+///
+/// Prefer this for endpoints that combine multiple parameter kinds.
+pub async fn call_args(
+    method: &str,
+    args: RequestArgs,
+) -> Result<domain::api_result::ApiResult, CallerError> {
+    global_caller()?.call_args(method, args).await
 }
 
 /// Main public API function with retry support
@@ -180,7 +194,20 @@ pub async fn call_params_with_retry(
     params: Option<CallParams>,
     retry_config: domain::retry_config::RetryConfig,
 ) -> Result<domain::api_result::ApiResult, CallerError> {
-    call_with_retry(method, params.map(|p| p.to_hashmap()), retry_config).await
+    global_caller()?
+        .call_params_with_retry(method, params, retry_config)
+        .await
+}
+
+/// Call an API with separated request arguments and retry support.
+pub async fn call_args_with_retry(
+    method: &str,
+    args: RequestArgs,
+    retry_config: domain::retry_config::RetryConfig,
+) -> Result<domain::api_result::ApiResult, CallerError> {
+    global_caller()?
+        .call_args_with_retry(method, args, retry_config)
+        .await
 }
 
 /// Download file from API endpoint
@@ -224,7 +251,20 @@ pub async fn download_params(
     params: Option<CallParams>,
     extension: Option<String>,
 ) -> Result<domain::download_result::DownloadResult, CallerError> {
-    download(method, params.map(|p| p.to_hashmap()), extension).await
+    global_caller()?
+        .download_params(method, params, extension)
+        .await
+}
+
+/// Download a file using explicitly separated request arguments.
+pub async fn download_args(
+    method: &str,
+    args: RequestArgs,
+    extension: Option<String>,
+) -> Result<domain::download_result::DownloadResult, CallerError> {
+    global_caller()?
+        .download_args(method, args, extension)
+        .await
 }
 
 /// Initialize the global configuration state from the default config path.
@@ -262,6 +302,11 @@ pub fn stop_watch_config() {
 /// Check whether the default global config file is currently being watched.
 pub fn is_watching_config() -> bool {
     config::config_loader::ConfigLoader::is_watching()
+}
+
+/// Return the most recent asynchronous global config-watch error.
+pub fn last_config_watch_error() -> Option<String> {
+    config::config_loader::ConfigLoader::last_watch_error()
 }
 
 /// Check whether the global configuration state has been loaded.
@@ -336,9 +381,9 @@ where
 /// let auth = BearerAuth::new("token".to_string());
 /// register_auth("my_auth", auth).unwrap();
 ///
-/// assert!(has_auth("my_auth"));
+/// assert!(has_auth("my_auth").unwrap());
 /// ```
-pub fn has_auth(name: &str) -> bool {
+pub fn has_auth(name: &str) -> Result<bool, CallerError> {
     AuthRegistry::contains(name)
 }
 
@@ -416,7 +461,12 @@ pub fn auth_count() -> Result<usize, CallerError> {
 }
 
 fn global_caller() -> Result<Caller, CallerError> {
-    let caller = Caller::from_config(config::config_loader::ConfigLoader::get_full_config()?)?;
+    static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = HTTP_CLIENT.get_or_init(reqwest::Client::new).clone();
+    let caller = Caller::builder()
+        .config(config::config_loader::ConfigLoader::get_full_config()?)
+        .http_client(client)
+        .build()?;
     caller.replace_auth_providers(AuthRegistry::snapshot()?)?;
     Ok(caller)
 }
@@ -458,7 +508,7 @@ mod tests {
         let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         ConfigLoader::reset_state_for_test();
         clear_auth().unwrap();
-        ConfigLoader::init_with_config(auth_config("token"));
+        ConfigLoader::init_with_config(auth_config("token")).unwrap();
 
         let err = call("GlobalSvc.list", None)
             .await

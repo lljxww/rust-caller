@@ -1,44 +1,25 @@
 {
-  "文档说明": "最小化配置示例，适合快速开始",
-  "authorizations": [
-    {
-      "name": "BearerAuth",
-      "header_name": "AuthConfig",
-      "type": "Bearer",
-      "token": "your-api-token-here"
-    }
-  ],
   "service_items": [
     {
       "api_name": "Example_API",
       "base_url": "https://api.example.com",
-      "description": "示例 API 服务",
       "api_items": [
         {
           "method": "get_data",
           "url": "/data",
           "http_method": "GET",
-          "param_type": "none",
-          "description": "获取数据",
-          "timeout": 5000,
-          "authorization_type": "BearerAuth"
+          "param_type": "query",
+          "description": "Get data",
+          "timeout": 5000
         },
         {
           "method": "create_item",
           "url": "/items",
           "http_method": "POST",
           "param_type": "json",
-          "description": "创建项目",
+          "description": "Create an item",
           "content_type": "application/json",
-          "timeout": 10000,
-          "authorization_type": "BearerAuth"
-        },
-        {
-          "method": "get_user",
-          "url": "/users/{user_id}",
-          "http_method": "GET",
-          "param_type": "path",
-          "description": "获取用户信息"
+          "timeout": 10000
         }
       ]
     }

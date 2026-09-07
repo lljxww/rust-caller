@@ -1,300 +1,89 @@
 [English](authentication_EN.md) | 简体中文
 
-# 认证系统
+# 认证
 
-Caller 提供灵活的认证系统，支持静态和动态认证。
+认证 provider 以名称注册，并由 service 或 endpoint 的 `authorization_type`
+引用；endpoint 配置优先于 service。未注册的 provider 会在网络 I/O 前返回
+`UnknownAuthProvider`。
 
-认证既可以注册到全局注册表，也可以注册到单个 `Caller` 实例。
+优先使用实例级注册：
 
-## 快速开始
-
-```rust
-use caller::{init_config, register_auth, BearerAuth, call};
-
-// 1. 初始化配置
-init_config()?;
-
-// 2. 注册认证器
-register_auth("my_api", BearerAuth::new("your-token".to_string()))?;
-
-// 3. 调用 API（自动应用认证）
-let result = call("MyAPI.protected_method", None).await?;
-```
-
-### 实例级注册
-
-如果你不想污染全局状态，可以把认证器挂到具体实例上：
-
-```rust
+```rust,no_run
 use caller::{BearerAuth, Caller};
 
 let caller = Caller::from_path("caller.json")?;
-caller.register_auth("github_auth", BearerAuth::from_env("GITHUB_TOKEN")?)?;
-
-let result = caller.call("GitHub.get_user", None).await?;
+caller.register_auth("github", BearerAuth::from_env("GITHUB_TOKEN")?)?;
+# Ok::<(), caller::CallerError>(())
 ```
 
-## 内置认证类型
+crate root 的 `register_auth` 只服务于全局 `call` 函数，状态在进程内共享。测试
+和多租户应用应使用实例注册表，避免共享可变状态。
 
-### 1. Bearer Token
+## 内置 Provider
 
-```rust
-use caller::BearerAuth;
+```rust,no_run
+use caller::{ApiKeyAuth, BasicAuth, BearerAuth, CustomHeaderAuth, OAuth2Auth};
 
-// 直接创建
-let auth = BearerAuth::new("your-token".to_string());
+let bearer = BearerAuth::new("token".to_string());
+let basic = BasicAuth::new("user".to_string(), "password".to_string());
+let key = ApiKeyAuth::new("x-api-key".to_string(), "secret".to_string());
+let oauth = OAuth2Auth::new("access-token".to_string());
 
-// 从环境变量
-let auth = BearerAuth::from_env("API_TOKEN")?;
+let mut custom = CustomHeaderAuth::new();
+custom.add_header("x-signature", "signature-value");
+# Ok::<(), caller::CallerError>(())
 ```
 
-### 2. Basic 认证
+`BearerAuth` 和 `OAuth2Auth` 默认都使用标准 `Authorization` Header。
+`BasicAuth`、`BearerAuth`、`ApiKeyAuth` 和 `OAuth2Auth` 的 `from_env` 在构造
+时读取一次环境变量并返回 `Result`。
 
-```rust
-use caller::BasicAuth;
+## 动态凭据
 
-let auth = BasicAuth::new("username".to_string(), "password".to_string());
+动态 provider 会在每次请求 attempt（包括重试）执行：
 
-// 从环境变量
-let auth = BasicAuth::from_env("API_USER", "API_PASS")?;
-```
+```rust,no_run
+use caller::{CallerError, DynamicBearerAuth};
 
-### 3. API Key
-
-```rust
-use caller::ApiKeyAuth;
-
-let auth = ApiKeyAuth::new("X-API-Key".to_string(), "your-key".to_string());
-
-// 从环境变量
-let auth = ApiKeyAuth::from_env("X-API-Key", "API_KEY")?;
-```
-
-### 4. OAuth2
-
-```rust
-use caller::OAuth2Auth;
-
-let auth = OAuth2Auth::new("your-token".to_string());
-
-// 自定义前缀
-let auth = OAuth2Auth::with_prefix("token".to_string(), "OAuth".to_string());
-```
-
-### 5. 自定义请求头
-
-```rust
-use caller::CustomHeaderAuth;
-
-let mut auth = CustomHeaderAuth::new();
-auth.add_header("X-API-Key", "key123");
-auth.add_header("X-Client-Id", "client456");
-```
-
-## 动态认证
-
-### 1. 从回调函数
-
-每次请求时动态获取 token：
-
-```rust
-use caller::DynamicBearerAuth;
-
-let auth = DynamicBearerAuth::new(|| {
-    // 每次请求时调用
-    fetch_token_from_cache_or_oauth()
+let auth = DynamicBearerAuth::try_new(|| {
+    obtain_current_token().map_err(|error| {
+        CallerError::authentication_error(format!("刷新 token 失败：{error}"))
+    })
 });
-register_auth("dynamic", auth)?;
+# fn obtain_current_token() -> Result<String, &'static str> { Ok("token".into()) }
 ```
 
-### 2. 从环境变量（动态读取）
+`DynamicBearerAuth::from_env` 会在请求时读取环境变量；
+`from_shared(Arc<RwLock<String>>)` 适合由外部刷新 token。环境变量缺失或锁中毒
+会返回明确错误，不再生成空凭据。动态 API key 和自定义 Header provider 具有
+相同模式。可能失败的回调应使用 `try_new`，`new` 只用于不会失败的回调。
 
-```rust
-use caller::DynamicBearerAuth;
+## 自定义认证
 
-// 请求时读取环境变量（非启动时）
-let auth = DynamicBearerAuth::from_env("API_TOKEN");
-register_auth("dynamic_env", auth)?;
-```
+可实现 `Authenticator`，也可直接注册异步闭包：
 
-### 3. 从共享状态（支持 Token 刷新）
+```rust,no_run
+use caller::Caller;
 
-```rust
-use caller::{DynamicBearerAuth, DynamicApiKeyAuth};
-use std::sync::{Arc, RwLock};
-
-// 创建共享 token
-let token = Arc::new(RwLock::new("initial-token".to_string()));
-
-// 注册认证器
-let auth = DynamicBearerAuth::from_shared(token.clone());
-register_auth("refreshable", auth)?;
-
-// 后续刷新 token
-*token.write().unwrap() = "new-refreshed-token".to_string();
-// 下次请求将使用新 token
-```
-
-### 4. 动态 API Key
-
-```rust
-use caller::DynamicApiKeyAuth;
-use std::sync::{Arc, RwLock};
-
-let api_key = Arc::new(RwLock::new("initial-key".to_string()));
-let auth = DynamicApiKeyAuth::from_shared("X-API-Key", api_key.clone());
-register_auth("dynamic_key", auth)?;
-```
-
-## 闭包认证
-
-最大灵活性，完全自定义：
-
-```rust
-use caller::register_auth_closure;
-use reqwest::RequestBuilder;
-use caller::AuthContext;
-
-register_auth_closure("custom", |builder: RequestBuilder, ctx: &AuthContext| async move {
-    Ok(builder
-        .header("X-Service", &ctx.service_name)
-        .header("X-Request-Id", format!("{}-{}", ctx.service_name, ctx.api_name))
-        .bearer_auth(get_token_for(&ctx.service_name))
+let caller = Caller::from_path("caller.json")?;
+caller.register_auth_closure("signed", |builder, context| {
+    let method = context.http_method.clone();
+    async move { Ok(builder.header("x-signed-method", method)) }
 })?;
+# Ok::<(), caller::CallerError>(())
 ```
 
-## 运行时更新
+`AuthContext` 包含配置的 service/endpoint 名称、最终 URL、HTTP 方法、provider
+名称和兼容用的标量参数 Map。该 Map 无法表达重复 query key；如果签名算法必须
+对重复 key 做规范化，应在自定义 `reqwest::Client` 层对最终请求签名。
 
-### 更新认证器
+## 安全约束
 
-```rust
-use caller::{register_auth, update_auth, BearerAuth};
-
-// 初始注册
-register_auth("github", BearerAuth::new("old-token".to_string()))?;
-
-// 运行时更新
-update_auth("github", BearerAuth::new("new-token".to_string()))?;
-```
-
-### 更新闭包认证
-
-```rust
-use caller::update_auth_closure;
-
-update_auth_closure("custom", |builder, ctx| async move {
-    Ok(builder.bearer_auth("updated-token"))
-})?;
-```
-
-## 配置文件关联
-
-在 `caller.json` 中引用认证：
-
-```json
-{
-  "service_items": [
-    {
-      "api_name": "GitHub",
-      "base_url": "https://api.github.com",
-      "authorization_type": "github_auth",
-      "api_items": [
-        {
-          "method": "get_user",
-          "url": "/user",
-          "http_method": "GET",
-          "param_type": "none"
-        }
-      ]
-    }
-  ]
-}
-```
-
-然后在代码中注册对应的认证器：
-
-```rust
-register_auth("github_auth", BearerAuth::from_env("GITHUB_TOKEN")?)?;
-```
-
-## API 参考
-
-| 函数 | 说明 |
-|------|------|
-| `register_auth(name, auth)` | 注册认证器 |
-| `register_auth_closure(name, f)` | 注册闭包认证 |
-| `update_auth(name, auth)` | 更新认证器 |
-| `update_auth_closure(name, f)` | 更新闭包认证 |
-| `has_auth(name)` | 检查是否已注册 |
-| `remove_auth(name)` | 移除认证器 |
-| `clear_auth()` | 清除所有认证器 |
-| `list_auth()` | 列出所有认证器名称 |
-| `auth_count()` | 获取认证器数量 |
-
-## 认证优先级
-
-当 Service 和 API Item 都配置了 `authorization_type` 时：
-
-**API Item > Service**
-
-```json
-{
-  "service_items": [
-    {
-      "api_name": "MyAPI",
-      "authorization_type": "default_auth",  // 默认认证
-      "api_items": [
-        {
-          "method": "public",
-          "url": "/public",
-          "param_type": "none"
-          // 使用 default_auth
-        },
-        {
-          "method": "private",
-          "url": "/private",
-          "param_type": "none",
-          "authorization_type": "special_auth"  // 覆盖为 special_auth
-        }
-      ]
-    }
-  ]
-}
-```
-
-## 最佳实践
-
-### 1. 敏感信息使用环境变量
-
-```rust
-// 推荐
-let auth = BearerAuth::from_env("API_TOKEN")?;
-
-// 不推荐
-let auth = BearerAuth::new("hardcoded-token".to_string());
-```
-
-### 2. Token 刷新使用动态认证
-
-```rust
-let token = Arc::new(RwLock::new(initial_token()));
-let auth = DynamicBearerAuth::from_shared(token.clone());
-register_auth("api", auth)?;
-
-// 在后台任务中刷新
-tokio::spawn(async move {
-    loop {
-        tokio::time::sleep(Duration::from_secs(3600)).await;
-        let new_token = refresh_token().await;
-        *token.write().unwrap() = new_token;
-    }
-});
-```
-
-### 3. 多服务使用不同认证
-
-```rust
-register_auth("github", BearerAuth::from_env("GITHUB_TOKEN")?)?;
-register_auth("aws", ApiKeyAuth::from_env("X-AWS-Key", "AWS_ACCESS_KEY")?)?;
-register_auth("internal", BasicAuth::from_env("INT_USER", "INT_PASS")?)?;
-```
+- token 不应进入仓库配置、日志、panic 信息或 URL。
+- 内置 provider 的 `Debug` 会隐藏密钥；自定义 middleware/authenticator 仍需
+  自己实现脱敏。
+- 优先从环境变量或 secret manager 获取凭据，刷新失败必须向上传递。
+- 网络刷新 token 时不要持有写锁。
+- Header 名称和值会在构建请求时由 reqwest 校验。
+- `authorizations[].authorization_info` 是旧元数据，不会应用到请求；不要把它
+  当作密钥存储。

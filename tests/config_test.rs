@@ -5,16 +5,9 @@ use caller::ResponseBody;
 use reqwest::StatusCode;
 
 #[test]
-fn test_models_mod_exists() {
-    // This test verifies that models module can be imported and used
-    // The test passes if the module path compiles successfully
-}
-
-#[test]
 fn test_api_result_creation() {
     let test_json = r#"{"ok": 1, "test": "value"}"#;
-    let result = ApiResult::build(test_json.to_string(), StatusCode::OK)
-        .expect("Failed to create ApiResult");
+    let result = ApiResult::build(test_json.to_string(), StatusCode::OK);
 
     assert_eq!(1, result.i64_at("ok").unwrap());
     assert_eq!("value", result.str_at("test").unwrap());
@@ -23,8 +16,7 @@ fn test_api_result_creation() {
 #[test]
 fn test_api_result_invalid_json() {
     let invalid_json = r#"{"invalid json"#;
-    let result = ApiResult::build(invalid_json.to_string(), StatusCode::OK)
-        .expect("non-json responses should still build");
+    let result = ApiResult::build(invalid_json.to_string(), StatusCode::OK);
 
     assert!(result.is_text());
     assert_eq!(result.text(), Some(invalid_json));
@@ -42,10 +34,6 @@ fn test_api_result_invalid_json() {
 
 #[tokio::test]
 async fn test_method_format_validation() {
-    // Test valid method through public API
-    let _result = caller::call("JP.list", None).await;
-    // This should work for a valid method
-
     // Test invalid method through public API
     let result = caller::call("invalid_method", None).await;
     assert!(result.is_err());
@@ -79,16 +67,4 @@ fn test_error_categories_are_stable() {
         CallerError::unsupported_param_type("xml").category(),
         ErrorCategory::Protocol
     );
-}
-
-#[test]
-fn test_http_method_validation() {
-    // Test through public configuration loading
-    // This indirectly tests HTTP method validation
-
-    // The HTTP method validation happens during context building
-    // We'll test this by trying to create a context that would fail
-
-    // Note: This test is now implemented as an integration test
-    // through the public API rather than testing internal methods directly
 }

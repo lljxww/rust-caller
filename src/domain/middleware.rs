@@ -16,6 +16,12 @@ pub struct RequestContext {
     pub headers: HeaderMap,
     /// Request parameters (if any)
     pub params: Option<HashMap<String, String>>,
+    /// URL path parameters for calls made with `RequestArgs`.
+    pub path_params: Option<HashMap<String, String>>,
+    /// Query parameters for calls made with `RequestArgs`.
+    pub query_params: Option<Vec<(String, String)>>,
+    /// Form parameters for calls made with `RequestArgs`.
+    pub form_params: Option<Vec<(String, String)>>,
     /// Request body (if any, as JSON string)
     pub body: Option<String>,
     /// Custom metadata that can be set by middleware
@@ -23,25 +29,38 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
+    /// Create an empty middleware request context for an HTTP method and URL.
     pub fn new(method: &str, url: &str) -> Self {
         Self {
             method: method.to_string(),
             url: url.to_string(),
             headers: HeaderMap::new(),
             params: None,
+            path_params: None,
+            query_params: None,
+            form_params: None,
             body: None,
             metadata: HashMap::new(),
         }
     }
 
     /// Add a header to the request
-    pub fn with_header(mut self, key: &str, value: &str) -> Self {
-        if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-            && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value)
-        {
-            self.headers.insert(header_name, header_value);
-        }
-        self
+    pub fn with_header(mut self, key: &str, value: &str) -> Result<Self, CallerError> {
+        let header_name =
+            reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|error| {
+                CallerError::InvalidHeaderName {
+                    name: key.to_string(),
+                    message: error.to_string(),
+                }
+            })?;
+        let header_value = reqwest::header::HeaderValue::from_str(value).map_err(|error| {
+            CallerError::InvalidHeaderValue {
+                name: key.to_string(),
+                message: error.to_string(),
+            }
+        })?;
+        self.headers.insert(header_name, header_value);
+        Ok(self)
     }
 
     /// Set the request body
@@ -79,6 +98,7 @@ pub struct ResponseContext {
 }
 
 impl ResponseContext {
+    /// Create a middleware response context with empty response headers.
     pub fn new(status_code: u16, body: String, request: RequestContext, duration_ms: u64) -> Self {
         Self {
             status_code,
@@ -143,6 +163,7 @@ pub struct MiddlewareChain {
 }
 
 impl MiddlewareChain {
+    /// Create an empty middleware chain.
     pub fn new() -> Self {
         Self {
             middlewares: Vec::new(),
@@ -169,17 +190,20 @@ impl MiddlewareChain {
         Ok(())
     }
 
-    /// Execute all after_response middleware in order
+    /// Execute response middleware in reverse registration order.
+    ///
+    /// This mirrors stack unwinding: `before_request` runs outer-to-inner and
+    /// `after_response` runs inner-to-outer.
     pub async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
-        for middleware in &self.middlewares {
+        for middleware in self.middlewares.iter().rev() {
             middleware.after_response(ctx).await?;
         }
         Ok(())
     }
 
-    /// Execute all on_error middleware in order
+    /// Execute error middleware in reverse registration order.
     pub async fn on_error(&self, error: &CallerError, ctx: &RequestContext) {
-        for middleware in &self.middlewares {
+        for middleware in self.middlewares.iter().rev() {
             middleware.on_error(error, ctx).await;
         }
     }
@@ -206,15 +230,29 @@ pub struct HeaderMiddleware {
 }
 
 impl HeaderMiddleware {
+    /// Create middleware with no configured headers.
     pub fn new() -> Self {
         Self {
             headers: HashMap::new(),
         }
     }
 
-    pub fn with_header(mut self, key: &str, value: &str) -> Self {
+    /// Add a validated header that will be inserted into every request.
+    pub fn with_header(mut self, key: &str, value: &str) -> Result<Self, CallerError> {
+        reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|error| {
+            CallerError::InvalidHeaderName {
+                name: key.to_string(),
+                message: error.to_string(),
+            }
+        })?;
+        reqwest::header::HeaderValue::from_str(value).map_err(|error| {
+            CallerError::InvalidHeaderValue {
+                name: key.to_string(),
+                message: error.to_string(),
+            }
+        })?;
         self.headers.insert(key.to_string(), value.to_string());
-        self
+        Ok(self)
     }
 }
 
@@ -228,11 +266,20 @@ impl Default for HeaderMiddleware {
 impl Middleware for HeaderMiddleware {
     async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
         for (key, value) in &self.headers {
-            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value)
-            {
-                ctx.headers.insert(header_name, header_value);
-            }
+            let header_name =
+                reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|error| {
+                    CallerError::InvalidHeaderName {
+                        name: key.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            let header_value = reqwest::header::HeaderValue::from_str(value).map_err(|error| {
+                CallerError::InvalidHeaderValue {
+                    name: key.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            ctx.headers.insert(header_name, header_value);
         }
         Ok(())
     }
@@ -254,6 +301,7 @@ pub struct LoggingMiddleware {
 }
 
 impl LoggingMiddleware {
+    /// Create middleware that logs requests, responses, and errors to stdio.
     pub fn new() -> Self {
         Self {
             log_request: true,
@@ -262,11 +310,13 @@ impl LoggingMiddleware {
         }
     }
 
+    /// Enable or disable request-line logging.
     pub fn with_log_request(mut self, enabled: bool) -> Self {
         self.log_request = enabled;
         self
     }
 
+    /// Enable or disable response summary logging.
     pub fn with_log_response(mut self, enabled: bool) -> Self {
         self.log_response = enabled;
         self
@@ -317,12 +367,14 @@ pub struct TimingMiddleware {
 }
 
 impl TimingMiddleware {
+    /// Create timing middleware without an outgoing timestamp header.
     pub fn new() -> Self {
         Self {
             timing_header: None,
         }
     }
 
+    /// Set the header that receives the request start time as Unix milliseconds.
     pub fn with_timing_header(mut self, header_name: &str) -> Self {
         self.timing_header = Some(header_name.to_string());
         self
@@ -338,7 +390,21 @@ impl Middleware for TimingMiddleware {
                 .unwrap_or_default()
                 .as_millis()
                 .to_string();
-            ctx.metadata.insert(header.clone(), timestamp);
+            let header_name =
+                reqwest::header::HeaderName::from_bytes(header.as_bytes()).map_err(|error| {
+                    CallerError::InvalidHeaderName {
+                        name: header.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            let header_value =
+                reqwest::header::HeaderValue::from_str(&timestamp).map_err(|error| {
+                    CallerError::InvalidHeaderValue {
+                        name: header.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            ctx.headers.insert(header_name, header_value);
         }
         Ok(())
     }
@@ -355,6 +421,9 @@ pub struct UserAgentMiddleware {
 }
 
 impl UserAgentMiddleware {
+    /// Create middleware that replaces the outgoing `User-Agent` header.
+    ///
+    /// Invalid header values fail in [`Middleware::before_request`].
     pub fn new(user_agent: &str) -> Self {
         Self {
             user_agent: user_agent.to_string(),
@@ -365,60 +434,20 @@ impl UserAgentMiddleware {
 #[async_trait]
 impl Middleware for UserAgentMiddleware {
     async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
-        if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(b"user-agent")
-            && let Ok(header_value) = reqwest::header::HeaderValue::from_str(&self.user_agent)
-        {
-            ctx.headers.insert(header_name, header_value);
-        }
+        let header_value =
+            reqwest::header::HeaderValue::from_str(&self.user_agent).map_err(|error| {
+                CallerError::InvalidUserAgent {
+                    value: self.user_agent.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+        ctx.headers
+            .insert(reqwest::header::USER_AGENT, header_value);
         Ok(())
     }
 
     fn name(&self) -> &str {
         "UserAgentMiddleware"
-    }
-}
-
-/// Middleware that retries requests on specific status codes
-#[derive(Debug, Clone)]
-pub struct RetryMiddleware {
-    /// Maximum number of retries
-    pub max_retries: u32,
-    /// Status codes that should trigger a retry
-    pub retry_status_codes: Vec<u16>,
-    /// Base delay between retries (in milliseconds)
-    pub base_delay_ms: u64,
-}
-
-impl RetryMiddleware {
-    pub fn new() -> Self {
-        Self {
-            max_retries: 3,
-            retry_status_codes: vec![429, 500, 502, 503, 504],
-            base_delay_ms: 500,
-        }
-    }
-
-    pub fn with_max_retries(mut self, max: u32) -> Self {
-        self.max_retries = max;
-        self
-    }
-
-    pub fn with_status_codes(mut self, codes: Vec<u16>) -> Self {
-        self.retry_status_codes = codes;
-        self
-    }
-}
-
-impl Default for RetryMiddleware {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Middleware for RetryMiddleware {
-    fn name(&self) -> &str {
-        "RetryMiddleware"
     }
 }
 
@@ -463,6 +492,8 @@ struct CircuitBreakerState {
     success_count: u64,
     /// Total number of blocked requests
     blocked_count: u64,
+    half_open_success_count: u32,
+    probe_in_flight: bool,
 }
 
 /// Configuration for the Circuit Breaker
@@ -518,16 +549,50 @@ impl CircuitBreakerConfig {
         self.failure_status_codes = codes;
         self
     }
+
+    /// Validate thresholds before the middleware starts serving requests.
+    pub fn validate(&self) -> Result<(), CallerError> {
+        if self.failure_threshold == 0 {
+            return Err(CallerError::config_error(
+                "Circuit breaker failure_threshold must be greater than zero",
+            ));
+        }
+        if self.success_threshold == 0 {
+            return Err(CallerError::config_error(
+                "Circuit breaker success_threshold must be greater than zero",
+            ));
+        }
+        if self.timeout_ms == 0 {
+            return Err(CallerError::config_error(
+                "Circuit breaker timeout_ms must be greater than zero",
+            ));
+        }
+        if self
+            .failure_status_codes
+            .iter()
+            .any(|status| !(100..=599).contains(status))
+        {
+            return Err(CallerError::config_error(
+                "Circuit breaker status codes must be between 100 and 599",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl CircuitBreakerMiddleware {
     /// Create a new CircuitBreakerMiddleware with default configuration
     pub fn new() -> Self {
-        Self::with_config(CircuitBreakerConfig::default())
+        Self::with_config_unchecked(CircuitBreakerConfig::default())
     }
 
     /// Create a new CircuitBreakerMiddleware with custom configuration
-    pub fn with_config(config: CircuitBreakerConfig) -> Self {
+    pub fn with_config(config: CircuitBreakerConfig) -> Result<Self, CallerError> {
+        config.validate()?;
+        Ok(Self::with_config_unchecked(config))
+    }
+
+    fn with_config_unchecked(config: CircuitBreakerConfig) -> Self {
         Self {
             state: std::sync::Arc::new(std::sync::Mutex::new(CircuitBreakerState {
                 state: CircuitState::Closed,
@@ -535,6 +600,8 @@ impl CircuitBreakerMiddleware {
                 last_failure_time: None,
                 success_count: 0,
                 blocked_count: 0,
+                half_open_success_count: 0,
+                probe_in_flight: false,
             })),
             config,
         }
@@ -542,13 +609,19 @@ impl CircuitBreakerMiddleware {
 
     /// Get the current circuit state
     pub fn state(&self) -> CircuitState {
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.calculate_current_state(&state)
     }
 
     /// Get statistics about the circuit breaker
     pub fn stats(&self) -> CircuitBreakerStats {
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         CircuitBreakerStats {
             state: self.calculate_current_state(&state),
             failure_count: state.failure_count,
@@ -559,10 +632,15 @@ impl CircuitBreakerMiddleware {
 
     /// Reset the circuit breaker to closed state
     pub fn reset(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.state = CircuitState::Closed;
         state.failure_count = 0;
         state.last_failure_time = None;
+        state.half_open_success_count = 0;
+        state.probe_in_flight = false;
     }
 
     /// Calculate the current state, handling timeout transitions
@@ -609,7 +687,10 @@ pub struct CircuitBreakerStats {
 #[async_trait]
 impl Middleware for CircuitBreakerMiddleware {
     async fn before_request(&self, ctx: &mut RequestContext) -> Result<(), CallerError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current_state = self.calculate_current_state(&state);
 
         match current_state {
@@ -625,6 +706,17 @@ impl Middleware for CircuitBreakerMiddleware {
                 // Update the state if we transitioned to HalfOpen
                 if current_state != state.state {
                     state.state = current_state;
+                    state.half_open_success_count = 0;
+                }
+                if current_state == CircuitState::HalfOpen {
+                    if state.probe_in_flight {
+                        state.blocked_count += 1;
+                        return Err(CallerError::RequestError(format!(
+                            "Circuit breaker probe is already in progress for {} {}",
+                            ctx.method, ctx.url
+                        )));
+                    }
+                    state.probe_in_flight = true;
                 }
                 Ok(())
             }
@@ -632,7 +724,11 @@ impl Middleware for CircuitBreakerMiddleware {
     }
 
     async fn after_response(&self, ctx: &mut ResponseContext) -> Result<(), CallerError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.probe_in_flight = false;
 
         if self.is_failure_status(ctx.status_code) {
             // Failure response
@@ -648,23 +744,24 @@ impl Middleware for CircuitBreakerMiddleware {
                 CircuitState::HalfOpen => {
                     // Failure in half-open state -> back to open
                     state.state = CircuitState::Open;
+                    state.half_open_success_count = 0;
                 }
                 CircuitState::Open => {
                     // Already open, nothing to do
                 }
             }
-        } else if ctx.is_success() {
-            // Success response
+        } else {
+            // Any response not explicitly configured as a failure proves the
+            // upstream is reachable, including valid 4xx responses.
             state.success_count += 1;
 
             match state.state {
                 CircuitState::HalfOpen => {
-                    // Check if we've had enough successes to close the circuit
-                    if state.failure_count > 0 {
-                        state.failure_count -= 1;
-                    }
-                    if state.failure_count == 0 {
+                    state.half_open_success_count += 1;
+                    if state.half_open_success_count >= self.config.success_threshold {
                         state.state = CircuitState::Closed;
+                        state.failure_count = 0;
+                        state.half_open_success_count = 0;
                     }
                 }
                 CircuitState::Closed => {
@@ -682,8 +779,15 @@ impl Middleware for CircuitBreakerMiddleware {
         Ok(())
     }
 
-    async fn on_error(&self, _error: &CallerError, _ctx: &RequestContext) {
-        let mut state = self.state.lock().unwrap();
+    async fn on_error(&self, error: &CallerError, _ctx: &RequestContext) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.probe_in_flight = false;
+        if !error.is_network_error() {
+            return;
+        }
         state.failure_count += 1;
         state.last_failure_time = Some(std::time::Instant::now());
 
@@ -691,6 +795,7 @@ impl Middleware for CircuitBreakerMiddleware {
             || state.failure_count >= self.config.failure_threshold
         {
             state.state = CircuitState::Open;
+            state.half_open_success_count = 0;
         }
     }
 
@@ -707,6 +812,7 @@ mod tests {
     fn test_request_context_builder() {
         let ctx = RequestContext::new("GET", "https://example.com/api")
             .with_header("X-Custom", "value")
+            .unwrap()
             .with_metadata("trace_id", "123");
 
         assert_eq!(ctx.method, "GET");
@@ -737,7 +843,7 @@ mod tests {
     #[test]
     fn test_middleware_chain() {
         let chain = MiddlewareChain::new()
-            .with(HeaderMiddleware::new().with_header("X-Test", "1"))
+            .with(HeaderMiddleware::new().with_header("X-Test", "1").unwrap())
             .with(LoggingMiddleware::new());
 
         assert_eq!(chain.len(), 2);
@@ -748,7 +854,9 @@ mod tests {
     fn test_header_middleware() {
         let middleware = HeaderMiddleware::new()
             .with_header("X-API-Key", "secret")
-            .with_header("X-Request-Id", "123");
+            .unwrap()
+            .with_header("X-Request-Id", "123")
+            .unwrap();
 
         let mut ctx = RequestContext::new("GET", "https://example.com");
 
@@ -765,8 +873,12 @@ mod tests {
     #[tokio::test]
     async fn test_middleware_chain_execution() {
         let chain = MiddlewareChain::new()
-            .with(HeaderMiddleware::new().with_header("X-First", "1"))
-            .with(HeaderMiddleware::new().with_header("X-Second", "2"));
+            .with(HeaderMiddleware::new().with_header("X-First", "1").unwrap())
+            .with(
+                HeaderMiddleware::new()
+                    .with_header("X-Second", "2")
+                    .unwrap(),
+            );
 
         let mut ctx = RequestContext::new("POST", "https://example.com/api");
         chain.before_request(&mut ctx).await.unwrap();
@@ -818,6 +930,15 @@ mod tests {
     }
 
     #[test]
+    fn circuit_breaker_rejects_zero_thresholds() {
+        let config = CircuitBreakerConfig::new().with_failure_threshold(0);
+        assert!(CircuitBreakerMiddleware::with_config(config).is_err());
+
+        let config = CircuitBreakerConfig::new().with_success_threshold(0);
+        assert!(CircuitBreakerMiddleware::with_config(config).is_err());
+    }
+
+    #[test]
     fn test_circuit_breaker_initial_state() {
         let middleware = CircuitBreakerMiddleware::new();
         assert_eq!(middleware.state(), CircuitState::Closed);
@@ -864,7 +985,7 @@ mod tests {
             .with_failure_threshold(2)
             .with_failure_status_codes(vec![500]);
 
-        let middleware = CircuitBreakerMiddleware::with_config(config);
+        let middleware = CircuitBreakerMiddleware::with_config(config).unwrap();
 
         // Simulate first failure
         {
@@ -900,7 +1021,7 @@ mod tests {
     async fn test_circuit_breaker_success_resets_failure_count() {
         let config = CircuitBreakerConfig::new().with_failure_threshold(3);
 
-        let middleware = CircuitBreakerMiddleware::with_config(config);
+        let middleware = CircuitBreakerMiddleware::with_config(config).unwrap();
 
         // Simulate a failure
         {
@@ -922,6 +1043,35 @@ mod tests {
         let stats = middleware.stats();
         assert_eq!(stats.failure_count, 0);
         assert_eq!(stats.state, CircuitState::Closed);
+    }
+
+    #[tokio::test]
+    async fn non_failure_response_resets_consecutive_failures() {
+        let middleware = CircuitBreakerMiddleware::new();
+        let request = RequestContext::new("GET", "https://example.com");
+        let mut failure = ResponseContext::new(500, String::new(), request.clone(), 1);
+        middleware.after_response(&mut failure).await.unwrap();
+
+        let mut client_error = ResponseContext::new(404, String::new(), request, 1);
+        middleware.after_response(&mut client_error).await.unwrap();
+
+        assert_eq!(middleware.stats().failure_count, 0);
+    }
+
+    #[tokio::test]
+    async fn local_errors_do_not_open_circuit() {
+        let middleware = CircuitBreakerMiddleware::with_config(
+            CircuitBreakerConfig::new().with_failure_threshold(1),
+        )
+        .unwrap();
+        let request = RequestContext::new("GET", "https://example.com");
+
+        middleware
+            .on_error(&CallerError::unknown_auth_provider("missing"), &request)
+            .await;
+
+        assert_eq!(middleware.state(), CircuitState::Closed);
+        assert_eq!(middleware.stats().failure_count, 0);
     }
 
     #[test]

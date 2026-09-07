@@ -23,7 +23,7 @@ use crate::shared::error::CallerError;
 /// AuthRegistry::register("my_auth", BearerAuth::new("token".to_string())).unwrap();
 ///
 /// // Check if registered
-/// assert!(AuthRegistry::contains("my_auth"));
+/// assert!(AuthRegistry::contains("my_auth").unwrap());
 /// # AuthRegistry::clear().unwrap();
 /// ```
 pub struct AuthRegistry {
@@ -31,6 +31,15 @@ pub struct AuthRegistry {
 }
 
 impl AuthRegistry {
+    fn validate_name(name: &str) -> Result<(), CallerError> {
+        if name.trim().is_empty() || name.trim() != name {
+            return Err(CallerError::config_error(
+                "Authentication provider name must be non-empty and cannot have surrounding whitespace",
+            ));
+        }
+        Ok(())
+    }
+
     /// Create a new empty registry
     fn new() -> Self {
         Self {
@@ -60,6 +69,7 @@ impl AuthRegistry {
     /// # AuthRegistry::clear().unwrap();
     /// ```
     pub fn register(name: &str, auth: impl Authenticator + 'static) -> Result<(), CallerError> {
+        Self::validate_name(name)?;
         let provider = AuthProvider::from_trait(auth);
         let mut providers = AuthRegistry::global()
             .providers
@@ -93,6 +103,7 @@ impl AuthRegistry {
             + Send
             + 'static,
     {
+        Self::validate_name(name)?;
         let provider = AuthProvider::from_closure(f);
         let mut providers = AuthRegistry::global()
             .providers
@@ -111,18 +122,21 @@ impl AuthRegistry {
     ///
     /// # Returns
     /// Some(AuthProvider) if found, None otherwise
-    pub fn get(name: &str) -> Option<AuthProvider> {
-        let providers = AuthRegistry::global().providers.read().ok()?;
-        providers.get(name).cloned()
+    pub fn get(name: &str) -> Result<Option<AuthProvider>, CallerError> {
+        let providers = AuthRegistry::global()
+            .providers
+            .read()
+            .map_err(|_| CallerError::lock_poisoned("global auth registry"))?;
+        Ok(providers.get(name).cloned())
     }
 
     /// Check if a provider with the given name exists
-    pub fn contains(name: &str) -> bool {
-        if let Ok(providers) = AuthRegistry::global().providers.read() {
-            providers.contains_key(name)
-        } else {
-            false
-        }
+    pub fn contains(name: &str) -> Result<bool, CallerError> {
+        let providers = AuthRegistry::global()
+            .providers
+            .read()
+            .map_err(|_| CallerError::lock_poisoned("global auth registry"))?;
+        Ok(providers.contains_key(name))
     }
 
     /// Remove a provider by name
@@ -223,8 +237,8 @@ mod tests {
         // Use unique name to avoid conflicts with parallel tests
         let name = format!("test_register_and_get_{}", std::process::id());
         AuthRegistry::register(&name, TestAuth).unwrap();
-        assert!(AuthRegistry::contains(&name));
-        assert!(AuthRegistry::get(&name).is_some());
+        assert!(AuthRegistry::contains(&name).unwrap());
+        assert!(AuthRegistry::get(&name).unwrap().is_some());
         AuthRegistry::remove(&name).ok();
     }
 
@@ -233,7 +247,7 @@ mod tests {
         let name = format!("test_remove_{}", std::process::id());
         AuthRegistry::register(&name, TestAuth).unwrap();
         assert!(AuthRegistry::remove(&name).unwrap());
-        assert!(!AuthRegistry::contains(&name));
+        assert!(!AuthRegistry::contains(&name).unwrap());
     }
 
     #[test]

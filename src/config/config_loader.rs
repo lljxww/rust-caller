@@ -2,49 +2,33 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 #[cfg(test)]
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::{fs, io, path::Path};
 
+use crate::config::ConfigFormat;
 use crate::shared::error::CallerError;
 use crate::{
     domain::api_config::ApiConfig, domain::caller_config::CallerConfig,
     domain::service_config::ServiceConfig,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigFormat {
-    Json,
-    Yaml,
-    Toml,
-}
-
-impl ConfigFormat {
-    pub fn from_extension(ext: &str) -> Option<Self> {
-        match ext.to_lowercase().as_str() {
-            "json" => Some(ConfigFormat::Json),
-            "yaml" | "yml" => Some(ConfigFormat::Yaml),
-            "toml" => Some(ConfigFormat::Toml),
-            _ => None,
-        }
-    }
-
-    pub fn detect_from_path(path: &str) -> Option<Self> {
-        Path::new(path)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Self::from_extension)
-    }
-}
-
 static CONFIG_PATH: &str = "./caller.json";
 
 static CONFIG: RwLock<Option<CallerConfig>> = RwLock::new(None);
 static WATCHER: RwLock<Option<RecommendedWatcher>> = RwLock::new(None);
+static LAST_WATCH_ERROR: RwLock<Option<String>> = RwLock::new(None);
+static WATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static CONFIG_PATH_OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
 #[cfg(test)]
 pub(crate) static TEST_STATE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Synchronous loader and process-global configuration manager.
+///
+/// Prefer [`crate::Caller::from_path`] when configuration and authentication
+/// must be isolated per client instance. The stateful methods on this type
+/// support the crate-root convenience API.
 pub struct ConfigLoader;
 
 impl Default for ConfigLoader {
@@ -54,6 +38,7 @@ impl Default for ConfigLoader {
 }
 
 impl ConfigLoader {
+    /// Construct the stateless loader value.
     pub fn new() -> Self {
         ConfigLoader
     }
@@ -84,6 +69,7 @@ impl ConfigLoader {
         Ok(())
     }
 
+    /// Resolve and clone a service and endpoint from process-global configuration.
     pub fn get_config(
         service_name: &str,
         api_config: &str,
@@ -113,6 +99,7 @@ impl ConfigLoader {
         Ok((service_config.clone(), api_config.clone()))
     }
 
+    /// Resolve global service/endpoint configuration together with its base URL.
     pub fn get_config_with_base_url(
         service_name: &str,
         api_config: &str,
@@ -146,6 +133,7 @@ impl ConfigLoader {
         ))
     }
 
+    /// Return whether process-global configuration is currently initialized.
     pub fn is_config_loaded() -> bool {
         CONFIG
             .read()
@@ -166,21 +154,24 @@ impl ConfigLoader {
             .ok_or(CallerError::ConfigNotInitialized)
     }
 
+    /// Reload the default `./caller.json` into process-global configuration.
     pub fn reload_config() -> Result<(), CallerError> {
         let config_path = Self::config_path();
         let config = Self::load_config_from_path(&config_path)?;
         Self::set_loaded_config(config)
     }
 
+    /// Load and validate the default `./caller.json` without changing global state.
     pub fn load_config() -> Result<CallerConfig, CallerError> {
         let config_path = Self::config_path();
         Self::load_config_from_path(&config_path)
     }
 
+    /// Load and validate configuration, detecting format from the path extension.
     pub fn load_config_from_path(path: &str) -> Result<CallerConfig, CallerError> {
         let config_content = fs::read_to_string(path).map_err(|err| match err.kind() {
             io::ErrorKind::NotFound => CallerError::config_file_not_found(path),
-            _ => CallerError::IoError(format!("Failed to read config file {}: {}", path, err)),
+            _ => CallerError::io(format!("reading config file '{path}'"), err),
         })?;
 
         let format = ConfigFormat::detect_from_path(path)
@@ -189,22 +180,33 @@ impl ConfigLoader {
         Self::parse_config(&config_content, format, path)
     }
 
+    /// Load and validate configuration using an explicit format.
     pub fn load_config_from_path_with_format(
         path: &str,
         format: ConfigFormat,
     ) -> Result<CallerConfig, CallerError> {
         let config_content = fs::read_to_string(path).map_err(|err| match err.kind() {
             io::ErrorKind::NotFound => CallerError::config_file_not_found(path),
-            _ => CallerError::IoError(format!("Failed to read config file {}: {}", path, err)),
+            _ => CallerError::io(format!("reading config file '{path}'"), err),
         })?;
 
         Self::parse_config(&config_content, format, path)
     }
 
-    pub fn init_with_config(config: CallerConfig) {
-        Self::set_loaded_config(config).unwrap();
+    /// Validate and install in-memory process-global configuration.
+    pub fn init_with_config(config: CallerConfig) -> Result<(), CallerError> {
+        config.validate()?;
+        let mut config_guard = CONFIG
+            .write()
+            .map_err(|_| CallerError::lock_poisoned("global config"))?;
+        *config_guard = Some(config);
+        Ok(())
     }
 
+    /// Watch the default config path and reload global state after debounced changes.
+    ///
+    /// Errors that happen in later filesystem callbacks can be read through
+    /// [`Self::last_watch_error`]. Calling this again replaces the active watcher.
     pub fn start_watching(debounce_duration: Duration) -> Result<(), CallerError> {
         let config_path = Self::config_path();
         let path = Path::new(&config_path);
@@ -216,11 +218,20 @@ impl ConfigLoader {
         let watch_path = path.parent().unwrap_or(path);
         let debounce = debounce_duration;
 
+        let watched_file = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let mut watcher = RecommendedWatcher::new(
-            move |result: notify::Result<notify::Event>| {
-                if result.is_ok() {
-                    Self::handle_config_change(debounce);
+            move |result: notify::Result<notify::Event>| match result {
+                Ok(event)
+                    if event.paths.iter().any(|path| {
+                        fs::canonicalize(path)
+                            .map(|path| path == watched_file)
+                            .unwrap_or_else(|_| path.ends_with(&watched_file))
+                    }) =>
+                {
+                    Self::schedule_config_change(debounce);
                 }
+                Ok(_) => {}
+                Err(error) => Self::set_last_watch_error(error.to_string()),
             },
             notify::Config::default(),
         )
@@ -231,30 +242,78 @@ impl ConfigLoader {
             .map_err(|e| CallerError::config_watch_error(&config_path, e.to_string()))?;
 
         {
-            let mut watcher_guard = WATCHER.write().unwrap();
+            let mut watcher_guard = WATCHER
+                .write()
+                .map_err(|_| CallerError::lock_poisoned("config watcher"))?;
             *watcher_guard = Some(watcher);
         }
+        Self::clear_last_watch_error();
 
         Ok(())
     }
 
+    /// Stop the process-global configuration watcher, if one is active.
     pub fn stop_watching() {
-        let mut watcher_guard = WATCHER.write().unwrap();
+        WATCH_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let mut watcher_guard = WATCHER
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *watcher_guard = None;
     }
 
+    /// Return whether a process-global configuration watcher is active.
     pub fn is_watching() -> bool {
-        let watcher_guard = WATCHER.read().unwrap();
+        let watcher_guard = WATCHER
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         watcher_guard.is_some()
     }
 
+    /// Return the most recent asynchronous config-watch error.
+    pub fn last_watch_error() -> Option<String> {
+        LAST_WATCH_ERROR
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn schedule_config_change(debounce_duration: Duration) {
+        let generation = WATCH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        std::thread::spawn(move || {
+            std::thread::sleep(debounce_duration);
+            if WATCH_GENERATION.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            Self::reload_after_watch_event();
+        });
+    }
+
+    #[cfg(test)]
     fn handle_config_change(debounce_duration: Duration) {
         std::thread::sleep(debounce_duration);
-        if let Err(e) = Self::reload_config() {
-            eprintln!("Failed to reload config: {}", e);
+        Self::reload_after_watch_event();
+    }
+
+    fn reload_after_watch_event() {
+        if let Err(error) = Self::reload_config() {
+            Self::set_last_watch_error(error.to_string());
         } else {
-            println!("[Caller] Configuration reloaded successfully");
+            Self::clear_last_watch_error();
         }
+    }
+
+    fn set_last_watch_error(error: String) {
+        let mut last_error = LAST_WATCH_ERROR
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *last_error = Some(error);
+    }
+
+    fn clear_last_watch_error() {
+        let mut last_error = LAST_WATCH_ERROR
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *last_error = None;
     }
 
     fn set_loaded_config(config: CallerConfig) -> Result<(), CallerError> {
@@ -266,6 +325,7 @@ impl ConfigLoader {
         Ok(())
     }
 
+    /// Compatibility alias for [`Self::get_config`].
     pub fn try_get_config(
         service_name: &str,
         api_config: &str,
@@ -302,15 +362,16 @@ impl ConfigLoader {
         let content = match output_format {
             ConfigFormat::Json => serde_json::to_string_pretty(&config)
                 .map_err(|e| CallerError::config_serialize_error("json", e.to_string()))?,
-            ConfigFormat::Yaml => serde_yaml::to_string(&config)
+            ConfigFormat::Yaml => serde_yaml_ng::to_string(&config)
                 .map_err(|e| CallerError::config_serialize_error("yaml", e.to_string()))?,
             ConfigFormat::Toml => toml::to_string_pretty(&config)
                 .map_err(|e| CallerError::config_serialize_error("toml", e.to_string()))?,
         };
 
         // Write to output file
-        fs::write(output_path, content)
-            .map_err(|e| CallerError::IoError(format!("Failed to write output file: {}", e)))?;
+        fs::write(output_path, content).map_err(|error| {
+            CallerError::io(format!("writing config file '{output_path}'"), error)
+        })?;
 
         Ok(())
     }
@@ -325,7 +386,7 @@ impl ConfigLoader {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use caller::{ConfigFileFormat as ConfigFormat, ConfigLoader};
+    /// use caller::{ConfigFormat, ConfigLoader};
     ///
     /// // Convert to YAML regardless of output file extension
     /// let result = ConfigLoader::convert_config_with_format("config.json", "config.txt", ConfigFormat::Yaml);
@@ -342,15 +403,16 @@ impl ConfigLoader {
         let content = match output_format {
             ConfigFormat::Json => serde_json::to_string_pretty(&config)
                 .map_err(|e| CallerError::config_serialize_error("json", e.to_string()))?,
-            ConfigFormat::Yaml => serde_yaml::to_string(&config)
+            ConfigFormat::Yaml => serde_yaml_ng::to_string(&config)
                 .map_err(|e| CallerError::config_serialize_error("yaml", e.to_string()))?,
             ConfigFormat::Toml => toml::to_string_pretty(&config)
                 .map_err(|e| CallerError::config_serialize_error("toml", e.to_string()))?,
         };
 
         // Write to output file
-        fs::write(output_path, content)
-            .map_err(|e| CallerError::IoError(format!("Failed to write output file: {}", e)))?;
+        fs::write(output_path, content).map_err(|error| {
+            CallerError::io(format!("writing config file '{output_path}'"), error)
+        })?;
 
         Ok(())
     }
@@ -363,7 +425,7 @@ impl ConfigLoader {
         let config: CallerConfig = match format {
             ConfigFormat::Json => serde_json::from_str(content)
                 .map_err(|e| CallerError::config_parse_error(path, "json", e.to_string())),
-            ConfigFormat::Yaml => serde_yaml::from_str(content)
+            ConfigFormat::Yaml => serde_yaml_ng::from_str(content)
                 .map_err(|e| CallerError::config_parse_error(path, "yaml", e.to_string())),
             ConfigFormat::Toml => toml::from_str(content)
                 .map_err(|e| CallerError::config_parse_error(path, "toml", e.to_string())),
@@ -386,6 +448,8 @@ impl ConfigLoader {
         if let Ok(mut path_guard) = CONFIG_PATH_OVERRIDE.write() {
             *path_guard = None;
         }
+
+        Self::clear_last_watch_error();
     }
 
     pub(crate) fn set_config_path_for_test(path: &Path) {
@@ -459,6 +523,27 @@ mod tests {
 
         ConfigLoader::reset_state_for_test();
         fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn config_defaults_authorizations_and_rejects_unknown_fields() {
+        let valid = r#"{
+          "service_items": [{
+            "api_name": "TestService",
+            "base_url": "https://example.com",
+            "api_items": []
+          }]
+        }"#;
+        let config = ConfigLoader::parse_config(valid, ConfigFormat::Json, "inline.json").unwrap();
+        assert!(config.authorizations.is_empty());
+
+        let typo = r#"{
+          "service_items": [],
+          "service_itmes": []
+        }"#;
+        let error = ConfigLoader::parse_config(typo, ConfigFormat::Json, "inline.json")
+            .expect_err("configuration typos must not be ignored");
+        assert!(matches!(error, CallerError::ConfigParseError { .. }));
     }
 
     #[test]

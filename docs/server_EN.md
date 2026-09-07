@@ -1,215 +1,79 @@
 [English](server_EN.md) | [简体中文](server_CN.md)
 
-# API Documentation Server
+# Local development server
 
-Caller provides a built-in API documentation server with Swagger UI and request proxy testing support.
-
-## Enable Feature
-
-Enable the `server` feature in `Cargo.toml`:
+The optional `server` feature exposes generated OpenAPI, Swagger UI, and an HTTP
+proxy backed by the same `Caller` execution path.
 
 ```toml
-[dependencies]
-caller = { version = "0.3.0", features = ["server"] }
+caller = { version = "0.4", features = ["server"] }
 ```
 
-## Starting the Server
-
-### Method 1: Using Example Program
-
-```bash
-cd your-project
-cargo run --features server --example server
-```
-
-### Method 2: Custom Code
-
-```rust
-use caller::{init_config, start_server, ServerConfig};
+```rust,no_run
+use caller::{Caller, ServerConfig, start_server_with_caller};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize configuration
-    init_config()?;
-
-    // Configure server
-    let config = ServerConfig::new()
+async fn main() -> Result<(), caller::CallerError> {
+    let caller = Caller::from_path("caller.json")?;
+    let server = ServerConfig::new()
         .addr("127.0.0.1:8080")?
-        .title("My API")
+        .title("Upstream APIs")
         .version("1.0.0");
-
-    // Start server
-    start_server(config).await?;
-
-    Ok(())
+    start_server_with_caller(server, caller).await
 }
 ```
 
-## Server Endpoints
+Routes:
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | Swagger UI - Interactive API documentation |
-| `GET /openapi.json` | OpenAPI 3.0 specification (JSON) |
-| `GET /proxy/{service}/{method}` | API proxy endpoint |
+| Route | Purpose |
+|---|---|
+| `GET /` | Swagger UI |
+| `GET /openapi.json` | OpenAPI 3.0 document |
+| `METHOD /proxy/{service}/{method}` | Proxy using the configured upstream HTTP method |
+| `METHOD /proxy?service=...&method=...` | Query-style proxy entry |
 
-## Swagger UI
+The proxy validates the incoming method, separates configured path/query/form/
+JSON locations, preserves typed JSON bodies, applies runtime auth, middleware,
+timeouts, response limits, and client reuse through `Caller`.
 
-After starting the server, open your browser and visit:
+Path parameters are supplied as query fields named after each placeholder. The
+legacy `id` query field maps to the first path placeholder. Form endpoints
+require `application/x-www-form-urlencoded`. JSON bodies may be any JSON value.
 
-```
-http://127.0.0.1:8080/
-```
+## Security defaults
 
-Swagger UI features:
-- View all configured API endpoints
-- View request/response formats
-- **Try it out** - Test APIs directly
+- Default bind is `127.0.0.1:8080`.
+- Non-loopback binds are rejected unless `allow_remote(true)` is explicit.
+- Wildcard CORS is disabled unless `allow_any_origin(true)` is explicit.
+- Proxy routes can be removed with `enable_proxy(false)`; OpenAPI and Swagger UI
+  remain available.
+- The server has no inbound authentication, authorization, rate limiting, TLS,
+  or audit persistence.
 
-### Proxy Mode
+`allow_remote(true)` can expose every registered upstream credential through a
+generic proxy. Do not use it on an untrusted network without placing a properly
+authenticated, authorized, rate-limited, TLS-terminating gateway in front. The
+built-in server is intentionally a development tool, not a production gateway.
 
-"Try it out" requests in Swagger UI are routed through the caller proxy with the path format:
+Swagger UI assets are loaded from `unpkg.com`; an offline or CSP-restricted
+environment must provide its own UI frontend and consume `/openapi.json`.
 
-```
-/proxy/{service}/{method}?id=VALUE&param1=VALUE1
-```
+## OpenAPI authentication schemes
 
-## Proxy Endpoint Usage
+Runtime authenticators are arbitrary Rust code, so their OpenAPI scheme cannot
+be inferred safely. The generator uses a documented bearer placeholder unless
+you override it:
 
-### GET Requests
+```rust,no_run
+use caller::{OpenApiGenerator, SecurityScheme};
 
-```bash
-# List endpoint
-curl "http://localhost:8080/proxy/JP/list"
-
-# Path parameters
-curl "http://localhost:8080/proxy/JP/get?id=1"
-
-# Query parameters
-curl "http://localhost:8080/proxy/JP/filter?userId=1&status=active"
-```
-
-### POST Requests
-
-```bash
-curl -X POST "http://localhost:8080/proxy/JP/create" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Test","body":"Content","userId":1}'
-```
-
-### Response Format
-
-Successful JSON responses are returned directly:
-
-```json
-{
-  "id": 1,
-  "title": "Test",
-  "body": "Content"
-}
+# fn build(caller: &caller::Caller) -> Result<(), caller::CallerError> {
+let document = OpenApiGenerator::from_caller(caller)?
+    .security_scheme("api_key", SecurityScheme::api_key("x-api-key", "header"))
+    .generate();
+# Ok(())
+# }
 ```
 
-Non-JSON responses are wrapped:
-
-```json
-{
-  "response": "<html>...</html>"
-}
-```
-
-Error responses:
-
-```json
-{
-  "error": "Service 'UnknownService' not found",
-  "available_services": ["JP", "GitHub"]
-}
-```
-
-## Custom Configuration
-
-### Listen Address
-
-```rust
-let config = ServerConfig::new()
-    .addr("0.0.0.0:3000")?;  // Listen on all interfaces
-```
-
-### API Title and Version
-
-```rust
-let config = ServerConfig::new()
-    .title("My Company API")
-    .version("2.0.0")
-    .description("Internal API documentation");
-```
-
-## OpenAPI Specification
-
-### Get Specification
-
-```bash
-# Download JSON
-curl http://localhost:8080/openapi.json > openapi.json
-
-# View online
-# Visit https://editor.swagger.io/ and paste content
-```
-
-### Programmatic Generation
-
-```rust
-use caller::{init_config, OpenApiGenerator};
-use std::fs;
-
-init_config()?;
-
-let generator = OpenApiGenerator::from_config_file()?
-    .title("My API")
-    .version("1.0.0")
-    .description("API documentation");
-
-// Save as JSON
-fs::write("openapi.json", generator.to_json()?)?;
-
-// Save as YAML
-fs::write("openapi.yaml", generator.to_yaml()?)?;
-```
-
-### Proxy Mode
-
-The server automatically enables proxy mode, generating OpenAPI paths that point to proxy endpoints:
-
-```json
-{
-  "paths": {
-    "/proxy/JP/list": {
-      "get": {
-        "summary": "List all posts",
-        "tags": ["JP"],
-        ...
-      }
-    }
-  }
-}
-```
-
-## CORS Support
-
-The server has CORS enabled by default, allowing cross-origin requests.
-
-## Integration with Other Tools
-
-### Postman
-
-1. Import OpenAPI specification: `http://localhost:8080/openapi.json`
-2. Postman automatically generates request collections
-
-### Insomnia
-
-1. Create new Collection
-2. Import from URL: `http://localhost:8080/openapi.json`
-
-### curl Script Generation
-
-Swagger UI can generate curl commands that you can copy and use directly.
+The generated query schema is necessarily generic because current endpoint
+configuration records parameter locations but not individual names or schemas.

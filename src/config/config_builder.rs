@@ -1,5 +1,6 @@
 //! Configuration builder for dynamically creating and editing caller configurations
 
+use crate::config::ConfigFormat;
 use crate::domain::{
     HttpMethod, ParamType, api_config::ApiConfig, caller_config::CallerConfig,
     service_config::ServiceConfig,
@@ -75,11 +76,13 @@ impl ConfigBuilder {
                 use_new_http_client: None,
             });
         }
-        self.config
+        let index = self
+            .config
             .service_items
-            .iter_mut()
-            .find(|s| s.api_name == name)
-            .unwrap()
+            .iter()
+            .position(|service| service.api_name == name)
+            .expect("service was present or inserted immediately above");
+        &mut self.config.service_items[index]
     }
 
     /// Remove a service by name
@@ -122,9 +125,23 @@ impl ConfigBuilder {
         Ok(self)
     }
 
-    /// Consume the builder and return the assembled [`CallerConfig`].
+    /// Consume the builder and return the assembled, unchecked [`CallerConfig`].
+    ///
+    /// Prefer [`Self::build_validated`] at trust boundaries. This method is
+    /// retained for callers that assemble a configuration in multiple stages.
     pub fn build(self) -> CallerConfig {
         self.config
+    }
+
+    /// Validate and consume the builder.
+    pub fn build_validated(self) -> Result<CallerConfig, CallerError> {
+        self.config.validate()?;
+        Ok(self.config)
+    }
+
+    /// Validate the currently assembled configuration.
+    pub fn validate(&self) -> Result<(), CallerError> {
+        self.config.validate()
     }
 
     /// Get reference to configuration
@@ -134,18 +151,21 @@ impl ConfigBuilder {
 
     /// Export to JSON string
     pub fn to_json(&self) -> Result<String, CallerError> {
+        self.validate()?;
         serde_json::to_string_pretty(&self.config)
             .map_err(|e| CallerError::config_serialize_error("json", e.to_string()))
     }
 
     /// Export to YAML string
     pub fn to_yaml(&self) -> Result<String, CallerError> {
-        serde_yaml::to_string(&self.config)
+        self.validate()?;
+        serde_yaml_ng::to_string(&self.config)
             .map_err(|e| CallerError::config_serialize_error("yaml", e.to_string()))
     }
 
     /// Export to TOML string
     pub fn to_toml(&self) -> Result<String, CallerError> {
+        self.validate()?;
         toml::to_string_pretty(&self.config)
             .map_err(|e| CallerError::config_serialize_error("toml", e.to_string()))
     }
@@ -166,18 +186,18 @@ impl ConfigBuilder {
 
         let content = self.to_format(format)?;
         std::fs::write(path, content)
-            .map_err(|e| CallerError::IoError(format!("Failed to write file: {}", e)))?;
+            .map_err(|error| CallerError::io(format!("writing config file '{path}'"), error))?;
 
         Ok(())
     }
 
     /// Load from file
     pub fn load(path: &str) -> Result<Self, CallerError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+        let content = std::fs::read_to_string(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
                 CallerError::config_file_not_found(path)
             } else {
-                CallerError::IoError(format!("Failed to read file: {}", e))
+                CallerError::io(format!("reading config file '{path}'"), error)
             }
         })?;
 
@@ -187,7 +207,7 @@ impl ConfigBuilder {
         let config: CallerConfig = match format {
             ConfigFormat::Json => serde_json::from_str(&content)
                 .map_err(|e| CallerError::config_parse_error(path, "json", e.to_string()))?,
-            ConfigFormat::Yaml => serde_yaml::from_str(&content)
+            ConfigFormat::Yaml => serde_yaml_ng::from_str(&content)
                 .map_err(|e| CallerError::config_parse_error(path, "yaml", e.to_string()))?,
             ConfigFormat::Toml => toml::from_str(&content)
                 .map_err(|e| CallerError::config_parse_error(path, "toml", e.to_string()))?,
@@ -207,44 +227,6 @@ impl ConfigBuilder {
 impl Default for ConfigBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Configuration file format
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigFormat {
-    Json,
-    Yaml,
-    Toml,
-}
-
-impl ConfigFormat {
-    /// Detect format from file path
-    pub fn detect_from_path(path: &str) -> Option<Self> {
-        let path_lower = path.to_lowercase();
-        if path_lower.ends_with(".json") {
-            Some(Self::Json)
-        } else if path_lower.ends_with(".yaml") || path_lower.ends_with(".yml") {
-            Some(Self::Yaml)
-        } else if path_lower.ends_with(".toml") {
-            Some(Self::Toml)
-        } else {
-            None
-        }
-    }
-
-    /// Get file extension
-    pub fn extension(&self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-            Self::Toml => "toml",
-        }
-    }
-
-    /// Get all supported formats
-    pub fn all() -> &'static [Self] {
-        &[Self::Json, Self::Yaml, Self::Toml]
     }
 }
 
@@ -295,14 +277,18 @@ impl<'a> ServiceBuilder<'a> {
     }
 
     /// Add an API endpoint
-    pub fn api(mut self, method: &str, url: &str, http_method: &str, param_type: &str) -> Self {
+    pub fn api(
+        mut self,
+        method: &str,
+        url: &str,
+        http_method: &str,
+        param_type: &str,
+    ) -> Result<Self, CallerError> {
         self.service.api_items.push(ApiConfig {
             method: method.to_string(),
             url: url.to_string(),
-            http_method: HttpMethod::parse(http_method)
-                .expect("ServiceBuilder::api received an invalid http_method"),
-            param_type: ApiConfig::parse_param_types(param_type)
-                .expect("ServiceBuilder::api received an invalid param_type"),
+            http_method: HttpMethod::parse(http_method)?,
+            param_type: ApiConfig::parse_param_types(param_type)?,
             description: None,
             need_cache: None,
             cache_time: None,
@@ -311,7 +297,7 @@ impl<'a> ServiceBuilder<'a> {
             timeout: None,
             use_new_http_client: None,
         });
-        self
+        Ok(self)
     }
 
     /// Add an API endpoint using typed HTTP method and parameter kinds.
@@ -456,7 +442,9 @@ mod tests {
             .service("JP", "https://jsonplaceholder.typicode.com")
             .timeout(30000)
             .api("list", "/posts", "GET", "query")
+            .unwrap()
             .api("get", "/posts/{id}", "GET", "path")
+            .unwrap()
             .build();
 
         let services = builder.list_services();
@@ -494,6 +482,7 @@ mod tests {
         builder
             .service("Test", "https://api.example.com")
             .api("ping", "/ping", "GET", "none")
+            .unwrap()
             .build();
 
         let json = builder.to_json().unwrap();

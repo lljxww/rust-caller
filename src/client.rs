@@ -1,17 +1,25 @@
 use crate::core::constants;
-use crate::core::context::{split_method, substitute_path_parameters, validate_path_parameters};
-use crate::domain::{
-    ApiConfig, ApiResult, AuthContext, AuthProvider, Authenticator, CallerConfig, DownloadResult,
-    ParamType, RetryConfig, ServiceConfig,
+use crate::core::context::{
+    split_method, substitute_path_parameters, validate_exact_path_parameters,
+    validate_path_parameters,
 };
+use crate::domain::auth_trait::{AuthContext, AuthProvider, Authenticator};
+use crate::domain::service_config::join_base_and_endpoint;
+use crate::domain::{
+    ApiConfig, ApiResult, CallerConfig, DownloadResult, Middleware, MiddlewareChain, ParamType,
+    RequestContext, ResponseContext, RetryConfig, ServiceConfig,
+};
+use crate::params::{CallParams, RequestArgs};
 use crate::shared::error::CallerError;
 use reqwest::{Method, header};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_MAX_RESPONSE_BODY_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Instance-based caller client.
 ///
@@ -46,6 +54,9 @@ pub struct Caller {
     default_timeout: Duration,
     default_headers: header::HeaderMap,
     user_agent: Option<header::HeaderValue>,
+    middlewares: MiddlewareChain,
+    max_response_body_bytes: u64,
+    max_download_bytes: u64,
 }
 
 /// Builder for constructing a [`Caller`] instance.
@@ -86,6 +97,9 @@ pub struct CallerBuilder {
     default_headers: header::HeaderMap,
     user_agent: Option<header::HeaderValue>,
     auth_providers: HashMap<String, AuthProvider>,
+    middlewares: MiddlewareChain,
+    max_response_body_bytes: u64,
+    max_download_bytes: u64,
 }
 
 struct InstanceContext {
@@ -94,8 +108,13 @@ struct InstanceContext {
     api_config: ApiConfig,
     http_method: Method,
     url: String,
+    path_params: Option<HashMap<String, String>>,
+    query_params: Option<Vec<(String, String)>>,
+    form_params: Option<Vec<(String, String)>>,
     params: Option<HashMap<String, String>>,
+    json_body: Option<serde_json::Value>,
     auth_type: Option<String>,
+    service_timeout: Option<u32>,
 }
 
 impl Caller {
@@ -155,6 +174,7 @@ impl Caller {
         name: &str,
         auth: impl Authenticator + 'static,
     ) -> Result<(), CallerError> {
+        validate_auth_provider_name(name)?;
         let provider = AuthProvider::from_trait(auth);
         let mut providers = self
             .auth_providers
@@ -172,6 +192,7 @@ impl Caller {
             + Send
             + 'static,
     {
+        validate_auth_provider_name(name)?;
         let provider = AuthProvider::from_closure(f);
         let mut providers = self
             .auth_providers
@@ -182,11 +203,12 @@ impl Caller {
     }
 
     /// Check whether an auth provider exists in this instance registry.
-    pub fn has_auth(&self, name: &str) -> bool {
-        self.auth_providers
+    pub fn has_auth(&self, name: &str) -> Result<bool, CallerError> {
+        Ok(self
+            .auth_providers
             .read()
-            .map(|providers| providers.contains_key(name))
-            .unwrap_or(false)
+            .map_err(|_| CallerError::lock_poisoned("caller auth registry"))?
+            .contains_key(name))
     }
 
     /// Remove an auth provider from this instance registry.
@@ -228,15 +250,38 @@ impl Caller {
         method: &str,
         params: Option<HashMap<String, String>>,
     ) -> Result<ApiResult, CallerError> {
-        let context = self.build_context(method, params)?;
-        let mut rb = self.base_request(&context)?;
-        rb = self.apply_params(rb, &context)?;
-        rb = self.apply_auth(rb, &context).await?;
+        let context = self.build_context(method, params, None)?;
+        self.execute_call(context).await
+    }
 
-        let response = rb.send().await?;
-        let status_code = response.status();
-        let result = response.text().await?;
-        ApiResult::build(result, status_code)
+    /// Execute a configured API call while preserving JSON parameter types.
+    pub async fn call_params(
+        &self,
+        method: &str,
+        params: Option<CallParams>,
+    ) -> Result<ApiResult, CallerError> {
+        let string_params = params.as_ref().map(CallParams::to_hashmap);
+        let typed_params = params.as_ref().map(CallParams::to_json).transpose()?;
+        let context = self.build_context(method, string_params, typed_params)?;
+        self.execute_call(context).await
+    }
+
+    /// Execute a configured API call with parameters separated by transport location.
+    ///
+    /// Prefer this method for combined endpoint types such as `path,json` or
+    /// `path,query`. Legacy `call` and `call_params` apply one parameter map to
+    /// every configured parameter kind for compatibility.
+    pub async fn call_args(
+        &self,
+        method: &str,
+        args: RequestArgs,
+    ) -> Result<ApiResult, CallerError> {
+        let context = self.build_args_context(method, args)?;
+        self.execute_call(context).await
+    }
+
+    async fn execute_call(&self, context: InstanceContext) -> Result<ApiResult, CallerError> {
+        self.execute_call_attempt(&context).await
     }
 
     /// Execute a configured API call with retry behavior.
@@ -246,51 +291,76 @@ impl Caller {
         params: Option<HashMap<String, String>>,
         retry_config: RetryConfig,
     ) -> Result<ApiResult, CallerError> {
-        let context = self.build_context(method, params)?;
-        let mut last_error: Option<CallerError> = None;
-        let mut attempt = 0u32;
+        let context = self.build_context(method, params, None)?;
+        self.execute_call_with_retry(context, retry_config).await
+    }
 
-        while attempt <= retry_config.max_retries {
+    /// Execute a type-preserving configured API call with retry behavior.
+    pub async fn call_params_with_retry(
+        &self,
+        method: &str,
+        params: Option<CallParams>,
+        retry_config: RetryConfig,
+    ) -> Result<ApiResult, CallerError> {
+        let string_params = params.as_ref().map(CallParams::to_hashmap);
+        let typed_params = params.as_ref().map(CallParams::to_json).transpose()?;
+        let context = self.build_context(method, string_params, typed_params)?;
+        self.execute_call_with_retry(context, retry_config).await
+    }
+
+    /// Execute a separated-argument call with retry behavior.
+    pub async fn call_args_with_retry(
+        &self,
+        method: &str,
+        args: RequestArgs,
+        retry_config: RetryConfig,
+    ) -> Result<ApiResult, CallerError> {
+        let context = self.build_args_context(method, args)?;
+        self.execute_call_with_retry(context, retry_config).await
+    }
+
+    async fn execute_call_with_retry(
+        &self,
+        context: InstanceContext,
+        retry_config: RetryConfig,
+    ) -> Result<ApiResult, CallerError> {
+        retry_config.validate()?;
+        let mut attempt = 0u32;
+        let mut next_delay = Duration::ZERO;
+
+        loop {
             if attempt > 0 {
-                tokio::time::sleep(retry_config.calculate_delay(attempt - 1)).await;
+                tokio::time::sleep(next_delay).await;
             }
 
-            let mut rb = self.base_request(&context)?;
-            rb = self.apply_params(rb, &context)?;
-            rb = self.apply_auth(rb, &context).await?;
-
-            match rb.send().await {
-                Ok(response) => {
-                    let status_code = response.status();
-                    let status = status_code.as_u16();
+            match self.execute_call_attempt(&context).await {
+                Ok(result) => {
+                    let status = result.status_code.as_u16();
 
                     if retry_config.should_retry_status(status)
                         && attempt < retry_config.max_retries
                     {
-                        last_error = Some(CallerError::RetryableHttpStatus {
-                            status,
-                            attempt: attempt + 1,
-                            max_retries: retry_config.max_retries,
-                        });
+                        next_delay =
+                            retry_config.calculate_response_delay(&result.headers, attempt);
                         attempt += 1;
                         continue;
                     }
 
-                    let result = response.text().await?;
-                    return ApiResult::build(result, status_code);
+                    return Ok(result);
                 }
-                Err(e) => {
-                    if retry_config.retry_on_network_error && attempt < retry_config.max_retries {
-                        last_error = Some(CallerError::from(e));
+                Err(error) => {
+                    if retry_config.retry_on_network_error
+                        && error.is_network_error()
+                        && attempt < retry_config.max_retries
+                    {
+                        next_delay = retry_config.calculate_delay(attempt);
                         attempt += 1;
                         continue;
                     }
-                    return Err(CallerError::from(e));
+                    return Err(error);
                 }
             }
         }
-
-        Err(last_error.unwrap_or(CallerError::RetryAttemptsExhausted))
     }
 
     /// Execute a configured API call and collect the response as downloadable bytes.
@@ -300,12 +370,49 @@ impl Caller {
         params: Option<HashMap<String, String>>,
         extension: Option<String>,
     ) -> Result<DownloadResult, CallerError> {
-        let context = self.build_context(method, params)?;
-        let mut rb = self.base_request(&context)?;
-        rb = self.apply_params(rb, &context)?;
-        rb = self.apply_auth(rb, &context).await?;
+        let context = self.build_context(method, params, None)?;
+        self.execute_download(context, extension).await
+    }
 
-        let response = rb.send().await?;
+    /// Download a configured response while accepting type-preserving parameters.
+    pub async fn download_params(
+        &self,
+        method: &str,
+        params: Option<CallParams>,
+        extension: Option<String>,
+    ) -> Result<DownloadResult, CallerError> {
+        let string_params = params.as_ref().map(CallParams::to_hashmap);
+        let typed_params = params.as_ref().map(CallParams::to_json).transpose()?;
+        let context = self.build_context(method, string_params, typed_params)?;
+        self.execute_download(context, extension).await
+    }
+
+    /// Download a configured response with parameters separated by transport location.
+    pub async fn download_args(
+        &self,
+        method: &str,
+        args: RequestArgs,
+        extension: Option<String>,
+    ) -> Result<DownloadResult, CallerError> {
+        let context = self.build_args_context(method, args)?;
+        self.execute_download(context, extension).await
+    }
+
+    async fn execute_download(
+        &self,
+        context: InstanceContext,
+        extension: Option<String>,
+    ) -> Result<DownloadResult, CallerError> {
+        let (rb, request_context, _) = self.prepare_request(&context).await?;
+
+        let response = match rb.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let error = CallerError::from(error);
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
         let status_code = response.status();
         let content_type = response
             .headers()
@@ -317,10 +424,15 @@ impl Caller {
             .get(header::CONTENT_DISPOSITION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let content = response.bytes().await?.to_vec();
+        let content = match read_limited_body(response, self.max_download_bytes).await {
+            Ok(content) => content,
+            Err(error) => {
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
 
-        let mut download_result =
-            DownloadResult::from_response(status_code, content, content_type)?;
+        let mut download_result = DownloadResult::from_response(status_code, content, content_type);
 
         if let Some(ext) = extension {
             download_result = download_result.with_extension(&ext);
@@ -335,10 +447,107 @@ impl Caller {
         Ok(download_result)
     }
 
+    async fn execute_call_attempt(
+        &self,
+        context: &InstanceContext,
+    ) -> Result<ApiResult, CallerError> {
+        let (request, request_context, started_at) = self.prepare_request(context).await?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let error = CallerError::from(error);
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
+
+        let status_code = response.status();
+        let response_headers = response.headers().clone();
+        let body = match read_limited_body(response, self.max_response_body_bytes).await {
+            Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+            Err(error) => {
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
+
+        let mut response_context = ResponseContext::new(
+            status_code.as_u16(),
+            body,
+            request_context,
+            duration_millis(started_at.elapsed()),
+        );
+        response_context.headers = response_headers;
+        if let Err(error) = self.middlewares.after_response(&mut response_context).await {
+            self.middlewares
+                .on_error(&error, &response_context.request)
+                .await;
+            return Err(error);
+        }
+
+        let status_code = reqwest::StatusCode::from_u16(response_context.status_code)
+            .map_err(|error| CallerError::parameter_error(error.to_string()))?;
+        Ok(ApiResult::build_with_metadata(
+            response_context.body,
+            status_code,
+            response_context.headers,
+            Duration::from_millis(response_context.duration_ms),
+        ))
+    }
+
+    async fn prepare_request(
+        &self,
+        context: &InstanceContext,
+    ) -> Result<(reqwest::RequestBuilder, RequestContext, Instant), CallerError> {
+        let mut request_context = RequestContext::new(context.http_method.as_str(), &context.url);
+        request_context.params = context.params.clone();
+        request_context.path_params = context.path_params.clone();
+        request_context.query_params = context.query_params.clone();
+        request_context.form_params = context.form_params.clone();
+        if context.api_config.has_param_type(ParamType::Json)? {
+            request_context.body = context
+                .json_body
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
+        }
+
+        if let Err(error) = self.middlewares.before_request(&mut request_context).await {
+            self.middlewares.on_error(&error, &request_context).await;
+            return Err(error);
+        }
+
+        let started_at = Instant::now();
+        let mut request = match self.base_request(context, &request_context) {
+            Ok(request) => request,
+            Err(error) => {
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
+        request = match self.apply_params(request, context, &request_context) {
+            Ok(request) => request,
+            Err(error) => {
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
+        request = match self.apply_auth(request, context, &request_context).await {
+            Ok(request) => request,
+            Err(error) => {
+                self.middlewares.on_error(&error, &request_context).await;
+                return Err(error);
+            }
+        };
+
+        Ok((request, request_context, started_at))
+    }
+
     fn build_context(
         &self,
         method: &str,
         params: Option<HashMap<String, String>>,
+        typed_params: Option<serde_json::Value>,
     ) -> Result<InstanceContext, CallerError> {
         let split_method = split_method(method)?;
         let service_name = &split_method[0];
@@ -346,13 +555,69 @@ impl Caller {
 
         let (service_config, api_config, base_url) =
             self.get_config_with_base_url(service_name, api_name)?;
-        let mut url = format!("{}{}", base_url, api_config.url);
+        let mut url = join_base_and_endpoint(&base_url, &api_config.url);
         if api_config.has_param_type(ParamType::Path)? {
             let params_map = params.as_ref().ok_or_else(|| {
                 CallerError::parameter_error("Path parameters are required for this API")
             })?;
             validate_path_parameters(&url, params_map.keys().map(|s| s.as_str()).collect())?;
             url = substitute_path_parameters(&url, params_map)?;
+        }
+
+        let http_method = api_config.http_method()?.as_reqwest_method();
+        let auth_type = api_config
+            .authorization_type
+            .clone()
+            .or_else(|| service_config.authorization_type.clone());
+        let json_body = if api_config.has_param_type(ParamType::Json)? {
+            if let Some(typed_params) = typed_params {
+                Some(typed_params)
+            } else {
+                params.as_ref().map(serde_json::to_value).transpose()?
+            }
+        } else {
+            None
+        };
+
+        Ok(InstanceContext {
+            service_name: service_name.to_string(),
+            api_name: api_name.to_string(),
+            api_config,
+            http_method,
+            url,
+            path_params: None,
+            query_params: None,
+            form_params: None,
+            params,
+            json_body,
+            auth_type,
+            service_timeout: service_config.timeout,
+        })
+    }
+
+    fn build_args_context(
+        &self,
+        method: &str,
+        args: RequestArgs,
+    ) -> Result<InstanceContext, CallerError> {
+        let split_method = split_method(method)?;
+        let service_name = &split_method[0];
+        let api_name = &split_method[1];
+        let (service_config, api_config, base_url) =
+            self.get_config_with_base_url(service_name, api_name)?;
+
+        validate_request_args(&api_config, &args)?;
+
+        let path_params = non_empty_scalar_map(args.path_params())?;
+        let query_params = collect_scalar_pairs(args.query_params(), args.query_pairs())?;
+        let form_params = collect_scalar_pairs(args.form_params(), args.form_pairs())?;
+        let mut url = join_base_and_endpoint(&base_url, &api_config.url);
+        if api_config.has_param_type(ParamType::Path)? {
+            let params = path_params.as_ref().ok_or_else(|| {
+                CallerError::parameter_error("Path parameters are required for this API")
+            })?;
+            validate_exact_path_parameters(&url, params.keys().map(String::as_str).collect())?;
+            url = substitute_path_parameters(&url, params)?;
         }
 
         let http_method = api_config.http_method()?.as_reqwest_method();
@@ -367,8 +632,13 @@ impl Caller {
             api_config,
             http_method,
             url,
-            params,
+            path_params,
+            query_params,
+            form_params,
+            params: None,
+            json_body: args.json_body().cloned(),
             auth_type,
+            service_timeout: service_config.timeout,
         })
     }
 
@@ -404,15 +674,19 @@ impl Caller {
     fn base_request(
         &self,
         context: &InstanceContext,
+        request_context: &RequestContext,
     ) -> Result<reqwest::RequestBuilder, CallerError> {
         let timeout = context
             .api_config
             .timeout
+            .or(context.service_timeout)
             .map(|timeout_ms| Duration::from_millis(timeout_ms as u64))
             .unwrap_or(self.default_timeout);
+        let method = Method::from_bytes(request_context.method.as_bytes())
+            .map_err(|_| CallerError::http_method_not_supported(&request_context.method))?;
         let mut builder = self
             .client
-            .request(context.http_method.clone(), &context.url)
+            .request(method, &request_context.url)
             .timeout(timeout);
 
         if !self.default_headers.is_empty() {
@@ -425,8 +699,26 @@ impl Caller {
             builder = builder.header(header::USER_AGENT, constants::UA);
         }
 
-        if !self.default_headers.contains_key(header::CONTENT_TYPE) {
-            builder = builder.header(header::CONTENT_TYPE, constants::DEFAULT_CONTENT_TYPE);
+        if let Some(content_type) = &context.api_config.content_type {
+            let content_type = header::HeaderValue::from_str(content_type).map_err(|error| {
+                CallerError::InvalidHeaderValue {
+                    name: header::CONTENT_TYPE.as_str().to_string(),
+                    message: error.to_string(),
+                }
+            })?;
+            builder = builder.header(header::CONTENT_TYPE, content_type);
+        }
+
+        if !request_context.headers.is_empty() {
+            builder = builder.headers(request_context.headers.clone());
+        }
+
+        if context.api_config.has_param_type(ParamType::Json)?
+            && !self.default_headers.contains_key(header::CONTENT_TYPE)
+            && !request_context.headers.contains_key(header::CONTENT_TYPE)
+            && context.api_config.content_type.is_none()
+        {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
         }
 
         Ok(builder)
@@ -436,15 +728,30 @@ impl Caller {
         &self,
         mut rb: reqwest::RequestBuilder,
         context: &InstanceContext,
+        request_context: &RequestContext,
     ) -> Result<reqwest::RequestBuilder, CallerError> {
-        if let Some(params_map) = &context.params {
-            for param_type in context.api_config.param_types()? {
-                match param_type {
-                    ParamType::Query => rb = rb.query(params_map),
-                    ParamType::Json => rb = rb.json(params_map),
-                    ParamType::Form => rb = rb.form(params_map),
-                    ParamType::Path | ParamType::None => {}
+        for param_type in context.api_config.param_types()? {
+            match param_type {
+                ParamType::Query => {
+                    if let Some(params) = &request_context.query_params {
+                        rb = rb.query(params);
+                    } else if let Some(params) = &request_context.params {
+                        rb = rb.query(params);
+                    }
                 }
+                ParamType::Json => {
+                    if let Some(body) = &request_context.body {
+                        rb = rb.body(body.clone());
+                    }
+                }
+                ParamType::Form => {
+                    if let Some(params) = &request_context.form_params {
+                        rb = rb.form(params);
+                    } else if let Some(params) = &request_context.params {
+                        rb = rb.form(params);
+                    }
+                }
+                ParamType::Path | ParamType::None => {}
             }
         }
 
@@ -455,6 +762,7 @@ impl Caller {
         &self,
         builder: reqwest::RequestBuilder,
         context: &InstanceContext,
+        request_context: &RequestContext,
     ) -> Result<reqwest::RequestBuilder, CallerError> {
         if let Some(auth_type) = &context.auth_type {
             let provider = self
@@ -468,9 +776,9 @@ impl Caller {
             let auth_context = AuthContext::new(
                 context.service_name.clone(),
                 context.api_name.clone(),
-                context.url.clone(),
+                request_context.url.clone(),
                 context.api_config.http_method.as_str().to_string(),
-                context.params.clone(),
+                merged_auth_params(request_context),
                 auth_type.clone(),
             );
 
@@ -479,6 +787,78 @@ impl Caller {
 
         Ok(builder)
     }
+}
+
+fn non_empty_scalar_map(
+    params: &CallParams,
+) -> Result<Option<HashMap<String, String>>, CallerError> {
+    if params.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(params.to_scalar_hashmap()?))
+    }
+}
+
+fn collect_scalar_pairs(
+    params: &CallParams,
+    extra: &[(String, String)],
+) -> Result<Option<Vec<(String, String)>>, CallerError> {
+    let mut values: Vec<(String, String)> = params.to_scalar_hashmap()?.into_iter().collect();
+    values.extend_from_slice(extra);
+    Ok((!values.is_empty()).then_some(values))
+}
+
+fn validate_auth_provider_name(name: &str) -> Result<(), CallerError> {
+    if name.trim().is_empty() || name.trim() != name {
+        return Err(CallerError::config_error(
+            "Authentication provider name must be non-empty and cannot have surrounding whitespace",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_request_args(api: &ApiConfig, args: &RequestArgs) -> Result<(), CallerError> {
+    let checks = [
+        (ParamType::Path, !args.path_params().is_empty()),
+        (
+            ParamType::Query,
+            !args.query_params().is_empty() || !args.query_pairs().is_empty(),
+        ),
+        (
+            ParamType::Form,
+            !args.form_params().is_empty() || !args.form_pairs().is_empty(),
+        ),
+        (ParamType::Json, args.json_body().is_some()),
+    ];
+
+    for (param_type, supplied) in checks {
+        if supplied && !api.has_param_type(param_type)? {
+            return Err(CallerError::parameter_error(format!(
+                "Endpoint '{}' does not accept {} parameters",
+                api.method,
+                param_type.as_str()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn merged_auth_params(request: &RequestContext) -> Option<HashMap<String, String>> {
+    let mut merged = HashMap::new();
+    for params in [request.params.as_ref(), request.path_params.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        merged.extend(params.clone());
+    }
+    for params in [request.query_params.as_ref(), request.form_params.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        merged.extend(params.iter().cloned());
+    }
+    (!merged.is_empty()).then_some(merged)
 }
 
 impl CallerBuilder {
@@ -492,6 +872,9 @@ impl CallerBuilder {
             default_headers: header::HeaderMap::new(),
             user_agent: None,
             auth_providers: HashMap::new(),
+            middlewares: MiddlewareChain::new(),
+            max_response_body_bytes: DEFAULT_MAX_RESPONSE_BODY_BYTES,
+            max_download_bytes: DEFAULT_MAX_DOWNLOAD_BYTES,
         }
     }
 
@@ -573,6 +956,39 @@ impl CallerBuilder {
         self
     }
 
+    /// Add middleware to the request execution chain.
+    pub fn middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: Middleware + 'static,
+    {
+        self.middlewares = self.middlewares.with(middleware);
+        self
+    }
+
+    /// Add shared middleware to the request execution chain.
+    pub fn middleware_arc(mut self, middleware: Arc<dyn Middleware>) -> Self {
+        self.middlewares = self.middlewares.with_arc(middleware);
+        self
+    }
+
+    /// Replace the request execution middleware chain.
+    pub fn middleware_chain(mut self, middlewares: MiddlewareChain) -> Self {
+        self.middlewares = middlewares;
+        self
+    }
+
+    /// Set the maximum buffered body size for ordinary API responses.
+    pub fn max_response_body_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_response_body_bytes = max_bytes;
+        self
+    }
+
+    /// Set the maximum buffered body size for downloads.
+    pub fn max_download_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_download_bytes = max_bytes;
+        self
+    }
+
     /// Validate configuration and build the final [`Caller`].
     pub fn build(self) -> Result<Caller, CallerError> {
         let config = match (self.config, self.config_path.as_ref()) {
@@ -585,14 +1001,20 @@ impl CallerBuilder {
             (None, None) => return Err(CallerError::MissingCallerBuilderConfig),
         };
         config.validate()?;
+        for name in self.auth_providers.keys() {
+            validate_auth_provider_name(name)?;
+        }
+        if self.default_timeout == Some(Duration::ZERO) {
+            return Err(CallerError::config_error(
+                "Caller default timeout must be greater than zero",
+            ));
+        }
 
         let client = match self.client {
             Some(client) => client,
-            None => reqwest::Client::builder().build().map_err(|e| {
-                CallerError::HttpClientBuildError {
-                    message: e.to_string(),
-                }
-            })?,
+            None => reqwest::Client::builder()
+                .build()
+                .map_err(CallerError::from)?,
         };
 
         Ok(Caller {
@@ -605,6 +1027,9 @@ impl CallerBuilder {
                 .unwrap_or_else(|| Duration::from_millis(DEFAULT_TIMEOUT_MS)),
             default_headers: self.default_headers,
             user_agent: self.user_agent,
+            middlewares: self.middlewares,
+            max_response_body_bytes: self.max_response_body_bytes,
+            max_download_bytes: self.max_download_bytes,
         })
     }
 }
@@ -616,50 +1041,114 @@ impl Default for CallerBuilder {
 }
 
 fn extract_filename_from_disposition(disposition: &str) -> Option<String> {
-    if let Some(start) = disposition.find("filename=") {
-        let rest = &disposition[start + 9..];
+    let mut regular_filename = None;
+    let mut extended_filename = None;
 
-        if let Some(stripped) = rest.strip_prefix('"') {
-            if let Some(end) = stripped.find('"') {
-                return Some(stripped[..end].to_string());
+    for parameter in disposition.split(';').skip(1) {
+        let Some((name, value)) = parameter.trim().split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+
+        if name.trim().eq_ignore_ascii_case("filename*") {
+            let mut parts = value.splitn(3, '\'');
+            let charset = parts.next().unwrap_or_default();
+            let _language = parts.next();
+            let encoded = parts.next();
+            if (charset.is_empty() || charset.eq_ignore_ascii_case("utf-8"))
+                && let Some(encoded) = encoded
+                && let Ok(decoded) = percent_decode(encoded)
+            {
+                extended_filename = Some(decoded);
             }
-        } else {
-            let end = rest.find(';').unwrap_or(rest.len());
-            return Some(rest[..end].trim().to_string());
+        } else if name.trim().eq_ignore_ascii_case("filename") {
+            regular_filename = parse_quoted_header_value(value);
         }
     }
 
-    if let Some(start) = disposition.find("filename*=") {
-        let rest = &disposition[start + 10..];
+    extended_filename.or(regular_filename)
+}
 
-        if let Some(prefix_end) = rest.find('\'')
-            && let Some(encoding_end) = rest[prefix_end + 1..].find('\'')
-        {
-            let encoded = &rest[prefix_end + encoding_end + 2..];
-            if let Ok(decoded) = percent_decode(encoded) {
-                return Some(decoded);
+fn parse_quoted_header_value(value: &str) -> Option<String> {
+    if let Some(quoted) = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        let mut parsed = String::with_capacity(quoted.len());
+        let mut escaped = false;
+        for character in quoted.chars() {
+            if escaped {
+                parsed.push(character);
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else {
+                parsed.push(character);
             }
         }
+        if escaped {
+            return None;
+        }
+        Some(parsed)
+    } else {
+        (!value.is_empty()).then(|| value.to_string())
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn read_limited_body(
+    mut response: reqwest::Response,
+    limit_bytes: u64,
+) -> Result<Vec<u8>, CallerError> {
+    if let Some(content_length) = response.content_length()
+        && content_length > limit_bytes
+    {
+        return Err(CallerError::ResponseBodyTooLarge {
+            limit_bytes,
+            received_bytes: content_length,
+        });
     }
 
-    None
+    let initial_capacity = response
+        .content_length()
+        .unwrap_or(0)
+        .min(limit_bytes)
+        .min(usize::MAX as u64) as usize;
+    let mut body = Vec::with_capacity(initial_capacity);
+
+    while let Some(chunk) = response.chunk().await? {
+        let received_bytes = (body.len() as u64).saturating_add(chunk.len() as u64);
+        if received_bytes > limit_bytes {
+            return Err(CallerError::ResponseBodyTooLarge {
+                limit_bytes,
+                received_bytes,
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
 }
 
 fn percent_decode(s: &str) -> Result<String, std::string::FromUtf8Error> {
-    let mut bytes = Vec::new();
-    let chars: Vec<char> = s.chars().collect();
+    let input = s.as_bytes();
+    let mut bytes = Vec::with_capacity(input.len());
     let mut i = 0;
 
-    while i < chars.len() {
-        if chars[i] == '%' && i + 2 < chars.len() {
-            let hex = format!("{}{}", chars[i + 1], chars[i + 2]);
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                bytes.push(byte);
-                i += 3;
-                continue;
-            }
+    while i < input.len() {
+        if input[i] == b'%'
+            && i + 2 < input.len()
+            && let Ok(hex) = std::str::from_utf8(&input[i + 1..i + 3])
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            bytes.push(byte);
+            i += 3;
+            continue;
         }
-        bytes.push(chars[i] as u8);
+        bytes.push(input[i]);
         i += 1;
     }
 
@@ -710,6 +1199,16 @@ mod tests {
         assert_eq!(config_b.service_items[0].base_url, "https://b.example.com");
     }
 
+    #[test]
+    fn content_disposition_prefers_utf8_extended_filename() {
+        let disposition =
+            "attachment; FILENAME=legacy.txt; filename*=UTF-8''report%20%E4%B8%AD%E6%96%87.pdf";
+        assert_eq!(
+            extract_filename_from_disposition(disposition).as_deref(),
+            Some("report 中文.pdf")
+        );
+    }
+
     #[tokio::test]
     async fn test_caller_auth_isolation() {
         let caller_with_auth =
@@ -754,7 +1253,7 @@ mod tests {
             caller.user_agent.as_ref().unwrap(),
             &header::HeaderValue::from_static("caller-test/1.0")
         );
-        assert!(caller.has_auth("token"));
+        assert!(caller.has_auth("token").unwrap());
     }
 
     #[test]

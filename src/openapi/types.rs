@@ -6,13 +6,19 @@ use std::collections::HashMap;
 /// OpenAPI 3.0 Document
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenApiDoc {
+    /// OpenAPI specification version, currently `3.0.3`.
     pub openapi: String,
+    /// Document title, version, and descriptive metadata.
     pub info: Info,
+    /// Upstream server definitions.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub servers: Vec<Server>,
+    /// Operations grouped by URL path.
     pub paths: HashMap<String, PathItem>,
+    /// Reusable schemas and security definitions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<Components>,
+    /// Tags used to group generated operations.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<Tag>,
 }
@@ -86,6 +92,10 @@ pub struct PathItem {
     pub delete: Option<Operation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch: Option<Operation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<Operation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Operation>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<Parameter>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -282,24 +292,32 @@ pub struct Components {
 /// Security scheme definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityScheme {
+    /// OpenAPI scheme type such as `apiKey`, `http`, or `oauth2`.
     #[serde(rename = "type")]
     pub scheme_type: String, // apiKey, http, oauth2, openIdConnect
+    /// Optional human-readable explanation of the scheme.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// API-key parameter name when `scheme_type` is `apiKey`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// API-key location such as `header` or `query`.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "in")]
     pub location: Option<String>, // query, header
+    /// HTTP authentication scheme such as `bearer` or `basic`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
+    /// Optional bearer-token format hint, such as `JWT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bearer_format: Option<String>,
+    /// OAuth flow definitions when `scheme_type` is `oauth2`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flows: Option<OAuthFlows>,
 }
 
 impl SecurityScheme {
+    /// Build an API-key security scheme.
     pub fn api_key(name: &str, location: &str) -> Self {
         Self {
             scheme_type: "apiKey".to_string(),
@@ -312,6 +330,7 @@ impl SecurityScheme {
         }
     }
 
+    /// Build an HTTP bearer scheme with a `JWT` format hint.
     pub fn bearer() -> Self {
         Self {
             scheme_type: "http".to_string(),
@@ -324,6 +343,7 @@ impl SecurityScheme {
         }
     }
 
+    /// Build an HTTP Basic authentication scheme.
     pub fn basic() -> Self {
         Self {
             scheme_type: "http".to_string(),
@@ -336,6 +356,7 @@ impl SecurityScheme {
         }
     }
 
+    /// Attach a human-readable description.
     pub fn description(mut self, description: &str) -> Self {
         self.description = Some(description.to_string());
         self

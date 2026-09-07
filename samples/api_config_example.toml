@@ -2,17 +2,7 @@
 # 支持 TOML 扩展名
 # 注意：字段名统一使用 snake_case，以匹配当前配置模型
 
-[[authorizations]]
-name = "BearerAuth"
-authorization_info = "Bearer your-secret-api-token-here"
-
-[[authorizations]]
-name = "content_typeAuth"
-authorization_info = "Content-Type application/json; charset=utf-8"
-
-[[authorizations]]
-name = "CustomHeaderAuth"
-authorization_info = "X-Custom-Auth custom-auth-value"
+authorizations = []
 
 # 服务配置
 [[service_items]]

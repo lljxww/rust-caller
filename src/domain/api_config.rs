@@ -1,33 +1,47 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 
+use crate::domain::service_config::validate_auth_reference;
 use crate::shared::error::CallerError;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+/// Configuration for one named API endpoint within a service.
 pub struct ApiConfig {
+    /// API method name used in the `service.method` lookup key.
     pub method: String,
+    /// Endpoint path, either empty for the service root or beginning with `/`.
     pub url: String,
     #[serde(
         deserialize_with = "deserialize_http_method",
         serialize_with = "serialize_http_method"
     )]
+    /// HTTP method used to call the endpoint.
     pub http_method: HttpMethod,
     #[serde(
         deserialize_with = "deserialize_param_types",
         serialize_with = "serialize_param_types"
     )]
+    /// Locations in which this endpoint accepts request parameters.
     pub param_type: Vec<ParamType>,
+    /// Human-readable endpoint description used by generated OpenAPI documents.
     pub description: Option<String>,
+    /// Legacy cache flag accepted for configuration compatibility; currently ignored.
     pub need_cache: Option<bool>,
+    /// Legacy cache duration accepted for configuration compatibility; currently ignored.
     pub cache_time: Option<u32>,
+    /// Explicit request content type, if the endpoint requires one.
     pub content_type: Option<String>,
+    /// Name of the runtime authentication provider to apply.
     pub authorization_type: Option<String>,
+    /// Endpoint request timeout in milliseconds, overriding service and caller defaults.
     pub timeout: Option<u32>,
+    /// Legacy client-selection flag accepted for compatibility; currently ignored.
     pub use_new_http_client: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// HTTP methods supported by configured endpoints.
 pub enum HttpMethod {
     /// `GET`
     Get,
@@ -39,9 +53,14 @@ pub enum HttpMethod {
     Delete,
     /// `PATCH`
     Patch,
+    /// `HEAD`
+    Head,
+    /// `OPTIONS`
+    Options,
 }
 
 impl HttpMethod {
+    /// Parse an HTTP method name case-insensitively.
     pub fn parse(value: &str) -> Result<Self, CallerError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "get" => Ok(Self::Get),
@@ -49,10 +68,13 @@ impl HttpMethod {
             "put" => Ok(Self::Put),
             "delete" => Ok(Self::Delete),
             "patch" => Ok(Self::Patch),
+            "head" => Ok(Self::Head),
+            "options" => Ok(Self::Options),
             _ => Err(CallerError::http_method_not_supported(value)),
         }
     }
 
+    /// Convert this value to the corresponding `reqwest` method.
     pub fn as_reqwest_method(self) -> reqwest::Method {
         match self {
             Self::Get => reqwest::Method::GET,
@@ -60,9 +82,12 @@ impl HttpMethod {
             Self::Put => reqwest::Method::PUT,
             Self::Delete => reqwest::Method::DELETE,
             Self::Patch => reqwest::Method::PATCH,
+            Self::Head => reqwest::Method::HEAD,
+            Self::Options => reqwest::Method::OPTIONS,
         }
     }
 
+    /// Return the uppercase HTTP method name used in configuration serialization.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Get => "GET",
@@ -70,9 +95,12 @@ impl HttpMethod {
             Self::Put => "PUT",
             Self::Delete => "DELETE",
             Self::Patch => "PATCH",
+            Self::Head => "HEAD",
+            Self::Options => "OPTIONS",
         }
     }
 
+    /// Return the lowercase key used by an OpenAPI path item.
     pub fn as_openapi_key(self) -> &'static str {
         match self {
             Self::Get => "get",
@@ -80,11 +108,14 @@ impl HttpMethod {
             Self::Put => "put",
             Self::Delete => "delete",
             Self::Patch => "patch",
+            Self::Head => "head",
+            Self::Options => "options",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Supported request parameter locations.
 pub enum ParamType {
     /// No request parameters.
     None,
@@ -99,6 +130,7 @@ pub enum ParamType {
 }
 
 impl ParamType {
+    /// Parse a configured parameter location case-insensitively.
     pub fn parse(value: &str) -> Result<Self, CallerError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
@@ -110,6 +142,7 @@ impl ParamType {
         }
     }
 
+    /// Return the lowercase representation used in configuration files.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -122,6 +155,7 @@ impl ParamType {
 }
 
 impl ApiConfig {
+    /// Parse and validate a comma-separated list of parameter locations.
     pub fn parse_param_types(value: &str) -> Result<Vec<ParamType>, CallerError> {
         let param_types: Vec<ParamType> = value
             .split(',')
@@ -132,6 +166,7 @@ impl ApiConfig {
         Ok(param_types)
     }
 
+    /// Serialize the configured parameter locations as a comma-separated string.
     pub fn param_types_as_str(&self) -> String {
         param_types_to_string(&self.param_type)
     }
@@ -156,9 +191,105 @@ impl ApiConfig {
 
     /// Validate the protocol-facing configuration fields of this API item.
     pub fn validate(&self) -> Result<(), CallerError> {
+        if self.method.trim().is_empty()
+            || self.method.trim() != self.method
+            || self.method.contains('.')
+        {
+            return Err(CallerError::config_error(format!(
+                "API method name must be non-empty and cannot contain '.': '{}'",
+                self.method
+            )));
+        }
         self.http_method()?;
-        self.param_types()?;
+        let param_types = self.param_types()?;
         self.validate_url_path()?;
+        self.validate_path_parameter_shape(&param_types)?;
+
+        if param_types.contains(&ParamType::Json) && param_types.contains(&ParamType::Form) {
+            return Err(CallerError::unsupported_param_type(
+                self.param_types_as_str(),
+            ));
+        }
+
+        if self.timeout == Some(0) {
+            return Err(CallerError::config_error(format!(
+                "Timeout for API method '{}' must be greater than zero",
+                self.method
+            )));
+        }
+
+        validate_auth_reference(self.authorization_type.as_deref(), "API", &self.method)?;
+
+        if let Some(content_type) = &self.content_type {
+            if content_type.trim().is_empty() || content_type.trim() != content_type {
+                return Err(CallerError::config_error(format!(
+                    "Content type for API method '{}' must be non-empty and cannot have surrounding whitespace",
+                    self.method
+                )));
+            }
+            reqwest::header::HeaderValue::from_str(content_type).map_err(|error| {
+                CallerError::InvalidHeaderValue {
+                    name: reqwest::header::CONTENT_TYPE.as_str().to_string(),
+                    message: error.to_string(),
+                }
+            })?;
+        }
+        Ok(())
+    }
+
+    fn validate_path_parameter_shape(&self, param_types: &[ParamType]) -> Result<(), CallerError> {
+        let mut depth = 0_u8;
+        let mut placeholder_count = 0_usize;
+        let mut placeholder_has_content = false;
+
+        for character in self.url.chars() {
+            match character {
+                '{' if depth == 0 => {
+                    depth = 1;
+                    placeholder_has_content = false;
+                }
+                '}' if depth == 0 => {
+                    return Err(CallerError::InvalidUrl {
+                        url: self.url.clone(),
+                        message: "unbalanced path parameter braces".to_string(),
+                    });
+                }
+                '{' => {
+                    return Err(CallerError::InvalidUrl {
+                        url: self.url.clone(),
+                        message: "nested path parameter braces are not supported".to_string(),
+                    });
+                }
+                '}' => {
+                    if !placeholder_has_content {
+                        return Err(CallerError::InvalidUrl {
+                            url: self.url.clone(),
+                            message: "path parameter name cannot be empty".to_string(),
+                        });
+                    }
+                    depth = 0;
+                    placeholder_count += 1;
+                }
+                _ if depth == 1 => placeholder_has_content = true,
+                _ => {}
+            }
+        }
+
+        if depth != 0 {
+            return Err(CallerError::InvalidUrl {
+                url: self.url.clone(),
+                message: "unbalanced path parameter braces".to_string(),
+            });
+        }
+
+        let declares_path = param_types.contains(&ParamType::Path);
+        if declares_path != (placeholder_count > 0) {
+            return Err(CallerError::config_error(format!(
+                "API method '{}' must declare path parameters exactly when its URL contains placeholders",
+                self.method
+            )));
+        }
+
         Ok(())
     }
 
